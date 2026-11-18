@@ -3,6 +3,13 @@ name: Build Release (Android)
 on:
   workflow_dispatch:
   push:
+    # The workflow-status badge tracks the latest run on the default branch.
+    # Without a main trigger the badge is stuck on whichever manual dispatch
+    # last ran on main (often a stale failure), because release builds happen
+    # on tag refs which the badge never looks at. Running the same signed build
+    # on main pushes keeps the default-branch badge honest; the release job
+    # below stays gated to tags via its `if:` guard.
+    branches: [main]
     tags:
       - 'v*'
 
