@@ -15,7 +15,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:ayatsuri/endpoints.dart';
+import 'package:ayatsuri/data/endpoints.dart';
 import 'package:ayatsuri/info/mihomo_info.dart';
 
 class CapturingAdapter implements HttpClientAdapter {

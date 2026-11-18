@@ -10,7 +10,7 @@ import 'package:flutter/material.dart';
 
 import 'package:ayatsuri/l10n/app_localizations.dart';
 
-import '../endpoints.dart';
+import '../data/endpoints.dart';
 import 'country_map.dart';
 import 'probe_history.dart';
 import 'smart_selector.dart';

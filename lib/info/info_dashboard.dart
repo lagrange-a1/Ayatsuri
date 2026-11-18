@@ -1,11 +1,11 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:re_highlight/languages/json.dart';
 import 'package:re_highlight/re_highlight.dart';
 
-import '../info/mihomo_info.dart';
 import '../l10n/app_localizations.dart';
+import '../proxies/group_label.dart';
+import 'json_preview.dart';
+import 'mihomo_info.dart';
 
 /// Structured dashboard for the Info tab.
 ///
@@ -430,9 +430,15 @@ class _GroupsSection extends StatelessWidget {
         for (final entry in g.sortedEntries)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 3),
-            child: Text(
-              '${entry.name} (${entry.type}) → ${g.chainFor(entry.name, proxyNames: proxyNames).join(' → ')}',
-              overflow: TextOverflow.ellipsis,
+            child: Tooltip(
+              message:
+                  '${entry.name} → '
+                  '${g.chainFor(entry.name, proxyNames: proxyNames).join(' → ')}',
+              child: Text(
+                '${cleanGroupLabel(entry.name)} (${entry.type}) → '
+                '${g.chainFor(entry.name, proxyNames: proxyNames).map(cleanGroupLabel).join(' → ')}',
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ),
       ],
@@ -616,8 +622,11 @@ class _RawJsonViewState extends State<RawJsonView> {
   static final Highlight _highlighter = Highlight()
     ..registerLanguages({'json': langJson});
 
-  static String prettyJson(Map<String, dynamic> json) =>
-      const JsonEncoder.withIndent('  ').convert(json);
+  /// Encoding a large payload on the UI isolate was the main source of the
+  /// "raw JSON freezes the page" reports. Do it once, in the background, and
+  /// keep only a bounded window in the render tree.
+  late final Future<String> _pretty = prettyJsonInBackground(widget.data);
+  int _visibleChars = kJsonPreviewChunk;
 
   static Map<String, TextStyle> _batTheme(ColorScheme scheme) {
     final base = TextStyle(
@@ -666,11 +675,46 @@ class _RawJsonViewState extends State<RawJsonView> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final span = _highlight(prettyJson(widget.data), scheme);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: SelectableText.rich(span),
+    final zh = Localizations.localeOf(context).languageCode == 'zh';
+    return FutureBuilder<String>(
+      future: _pretty,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done ||
+            snapshot.data == null) {
+          return const Padding(
+            padding: EdgeInsets.all(16),
+            child: LinearProgressIndicator(),
+          );
+        }
+        final code = snapshot.data!;
+        final window = jsonWindow(code, _visibleChars);
+        final remaining = code.length - window.length;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: SelectableText.rich(_highlight(window, scheme)),
+            ),
+            if (remaining > 0)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                child: OutlinedButton.icon(
+                  key: const ValueKey('raw-json-show-more'),
+                  onPressed: () =>
+                      setState(() => _visibleChars += kJsonPreviewChunk),
+                  icon: const Icon(Icons.expand_more, size: 16),
+                  label: Text(
+                    zh
+                        ? '显示更多 · 剩余 ${jsonSizeLabel(remaining)}'
+                        : 'Show more · ${jsonSizeLabel(remaining)} left',
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }

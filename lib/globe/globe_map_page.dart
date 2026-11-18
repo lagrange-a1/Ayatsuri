@@ -25,10 +25,11 @@ import 'package:flutter_earth_globe/flutter_earth_globe_controller.dart';
 import 'package:flutter_earth_globe/globe_coordinates.dart';
 import 'package:flutter_earth_globe/point.dart';
 
-import '../endpoints.dart';
+import '../data/endpoints.dart';
 import '../proxies/country_map.dart';
 import '../proxies/country_names.dart';
 import '../proxies/country_shapes.dart';
+import '../proxies/group_label.dart';
 import '../proxies/proxy_service.dart';
 import '../settings/app_settings.dart';
 import '../platform/test_guard.dart';
@@ -96,6 +97,13 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
   Timer? _immediateProbeTimer;
   bool _probingAll = false;
   int _tapToken = 0;
+
+  /// Guards the node picker to a single route. Rapid taps can call
+  /// [_onCountry] twice before the first sheet finishes its async load;
+  /// without this flag each call pushes another modal, so sheets stack like
+  /// cards. The flag is released in `finally` so a cancelled/failed open
+  /// never permanently blocks the next tap.
+  bool _sheetOpen = false;
 
   /// Countries with at least one candidate node (rebuilt in [_syncPoints]).
   /// Marker Points carry no Semantics; this feeds the whole-globe button's
@@ -634,47 +642,55 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
   }
 
   Future<void> _onCountry(String alpha2) async {
-    if (alpha2.isEmpty || alpha2 == '-99') return;
+    if (alpha2.isEmpty || alpha2 == '-99' || _sheetOpen) return;
     if (!mounted) return;
-    setState(() => _selectedAlpha2 = alpha2);
-    _hasExplicitCountrySelection = true;
-    // Remember the pick on an independent key; an explicit tap wins over
-    // both the remembered country and the kernel country on next start.
-    unawaited(_settings.saveLastCountry(alpha2));
-    _syncPoints();
-    if (!_selection.loaded) {
-      await _loadSelection();
+    // Set before the first await: a rapid second tap cannot push a second
+    // sheet while the first is still loading. Released in `finally` so a
+    // cancelled open never blocks the next tap.
+    _sheetOpen = true;
+    try {
+      setState(() => _selectedAlpha2 = alpha2);
+      _hasExplicitCountrySelection = true;
+      // Remember the pick on an independent key; an explicit tap wins over
+      // both the remembered country and the kernel country on next start.
+      unawaited(_settings.saveLastCountry(alpha2));
+      _syncPoints();
+      if (!_selection.loaded) {
+        await _loadSelection();
+      }
+      if (!mounted) return;
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        // fade/scale/spring/none animate the sheet *content* instead of
+        // sliding the sheet itself; slide keeps the Material default.
+        sheetAnimationStyle: _s.sheetAnimation == SheetAnimation.slide
+            ? null
+            : AnimationStyle.noAnimation,
+        builder: (_) => _CountrySheet(
+          selection: _selection,
+          alpha2: alpha2,
+          probeSort: _s.probeSort,
+          compact: _s.compactNodeList,
+          sheetAnimation: _s.sheetAnimation,
+          onSelected: (proxyName, groupName) {
+            if (mounted) {
+              final l10n = AppLocalizations.of(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(l10n.selectedSnack(proxyName, groupName)),
+                  duration: const Duration(seconds: 6),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+          },
+        ),
+      );
+    } finally {
+      _sheetOpen = false;
     }
-    if (!mounted) return;
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      // fade/scale/spring/none animate the sheet *content* instead of
-      // sliding the sheet itself; slide keeps the Material default.
-      sheetAnimationStyle: _s.sheetAnimation == SheetAnimation.slide
-          ? null
-          : AnimationStyle.noAnimation,
-      builder: (_) => _CountrySheet(
-        selection: _selection,
-        alpha2: alpha2,
-        probeSort: _s.probeSort,
-        compact: _s.compactNodeList,
-        sheetAnimation: _s.sheetAnimation,
-        onSelected: (proxyName, groupName) {
-          if (mounted) {
-            final l10n = AppLocalizations.of(context);
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(l10n.selectedSnack(proxyName, groupName)),
-                duration: const Duration(seconds: 6),
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-          }
-        },
-      ),
-    );
   }
 
   @override
@@ -1334,14 +1350,19 @@ class _CountrySheetState extends State<_CountrySheet> {
                       final hasNow = entry.value.any((c) => c.isNow);
                       return Padding(
                         padding: const EdgeInsets.only(right: 8),
-                        child: ChoiceChip(
-                          label: Text('${entry.key} · ${entry.value.length}'),
-                          selected: selected,
-                          avatar: hasNow
-                              ? const Icon(Icons.check, size: 16)
-                              : null,
-                          onSelected: (_) =>
-                              setState(() => _selectedGroupName = entry.key),
+                        child: Tooltip(
+                          message: entry.key,
+                          child: ChoiceChip(
+                            label: Text(
+                              '${cleanGroupLabel(entry.key)} · ${entry.value.length}',
+                            ),
+                            selected: selected,
+                            avatar: hasNow
+                                ? const Icon(Icons.check, size: 16)
+                                : null,
+                            onSelected: (_) =>
+                                setState(() => _selectedGroupName = entry.key),
+                          ),
                         ),
                       );
                     }).toList(),

@@ -8,7 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:ayatsuri/endpoints.dart';
+import 'package:ayatsuri/data/endpoints.dart';
 import 'package:ayatsuri/proxies/country_map.dart';
 import 'package:ayatsuri/l10n/app_localizations.dart';
 import 'package:ayatsuri/proxies/proxy_service.dart';

@@ -24,13 +24,23 @@ String _initialViewLabel(AppLocalizations l10n, InitialView v) => switch (v) {
   InitialView.custom => l10n.customView,
 };
 
-/// Display label for a [DynamicSchemeVariant]. The variant names have no
-/// l10n keys yet (arb change is out of this scope), so show a presentation
-/// name instead of the raw camelCase enum identifier.
-String _schemeVariantLabel(DynamicSchemeVariant v) {
-  final name = v.name;
-  return name[0].toUpperCase() + name.substring(1);
-}
+/// Friendly names for the Material color variants. The raw enum labels
+/// ("TonalSpot", "Expressive"…) are implementation identifiers, not words a
+/// person picking a color wants to read.
+String _schemeVariantLabel(
+  BuildContext context,
+  DynamicSchemeVariant v,
+) => switch (v) {
+  DynamicSchemeVariant.tonalSpot => _smartLabel(context, '标准', 'Balanced'),
+  DynamicSchemeVariant.fidelity => _smartLabel(context, '还原', 'True to seed'),
+  DynamicSchemeVariant.monochrome => _smartLabel(context, '黑白', 'Mono'),
+  DynamicSchemeVariant.neutral => _smartLabel(context, '素雅', 'Subtle'),
+  DynamicSchemeVariant.vibrant => _smartLabel(context, '鲜艳', 'Vivid'),
+  DynamicSchemeVariant.expressive => _smartLabel(context, '灵动', 'Playful'),
+  DynamicSchemeVariant.content => _smartLabel(context, '本色', 'Seed first'),
+  DynamicSchemeVariant.rainbow => _smartLabel(context, '彩虹', 'Rainbow'),
+  DynamicSchemeVariant.fruitSalad => _smartLabel(context, '果盘', 'Fruit salad'),
+};
 
 /// No l10n keys exist for the smart-routing settings, and adding them would
 /// require regenerating `app_localizations.dart`. Follow the page's existing
@@ -135,7 +145,7 @@ class SettingsPage extends StatelessWidget {
               ),
               ListTile(
                 title: Text(l10n.colorStyle),
-                subtitle: Text(_schemeVariantLabel(s.schemeVariant)),
+                subtitle: Text(_schemeVariantLabel(context, s.schemeVariant)),
                 trailing: DropdownButton<DynamicSchemeVariant>(
                   value: s.schemeVariant,
                   underline: const SizedBox.shrink(),
@@ -143,7 +153,7 @@ class SettingsPage extends StatelessWidget {
                       .map(
                         (v) => DropdownMenuItem(
                           value: v,
-                          child: Text(_schemeVariantLabel(v)),
+                          child: Text(_schemeVariantLabel(context, v)),
                         ),
                       )
                       .toList(),
@@ -378,26 +388,11 @@ class SettingsPage extends StatelessWidget {
                   '${s.customLng.round()}°',
                 ),
               ],
-              _sliderTile(
-                context,
-                _smartLabel(context, 'EMA 平滑系数', 'EMA smoothing'),
-                s.emaAlpha,
-                0.0,
-                1.0,
-                (v) => set(s.copyWith(emaAlpha: v)),
-                s.emaAlpha.toStringAsFixed(2),
-                sliderKey: const ValueKey('settings-ema-alpha'),
-              ),
-              _sliderTile(
-                context,
-                _smartLabel(context, '切换迟滞', 'Switch hysteresis'),
-                s.hysteresisMs.toDouble(),
-                0,
-                5000,
-                (v) => set(s.copyWith(hysteresisMs: v.round())),
-                '${s.hysteresisMs} ms',
-                sliderKey: const ValueKey('settings-hysteresis'),
-              ),
+              // EMA/hysteresis used to be exposed here as two sliders. They
+              // are routing internals with no meaning to a node picker, and
+              // the defaults (0.2 / 50ms) are already good. The fields stay
+              // in AppSettings so existing stored configs and tests keep
+              // round-tripping; only the knobs are gone.
               SegmentedButton<ProbeSort>(
                 segments: [
                   ButtonSegment(

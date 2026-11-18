@@ -237,4 +237,34 @@ void main() {
     expect(find.text('外观'), findsOneWidget);
     expect(store.getString('ayatsuri_settings_v1'), contains('"locale":"zh"'));
   });
+
+  testWidgets('routing internals are hidden and color style is humanized', (
+    tester,
+  ) async {
+    final controller = AppSettingsController(
+      storeFactory: () async => _FakeSettingsStore(),
+    );
+    await controller.load();
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: const [
+          AppLocalizations.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: SettingsPage(controller: controller),
+      ),
+    );
+    // EMA/hysteresis are routing internals: the persisted fields survive but
+    // the settings page must not expose model-tuning knobs to a node picker.
+    expect(find.byKey(const ValueKey('settings-ema-alpha')), findsNothing);
+    expect(find.byKey(const ValueKey('settings-hysteresis')), findsNothing);
+    expect(find.text('EMA smoothing'), findsNothing);
+    expect(find.text('Switch hysteresis'), findsNothing);
+    // Raw enum identifiers were replaced with readable labels.
+    expect(find.text('Seed first'), findsAtLeastNWidgets(1));
+    expect(find.text('Content'), findsNothing);
+  });
 }
