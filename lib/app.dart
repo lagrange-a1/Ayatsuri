@@ -110,7 +110,7 @@ class _MihomoAppState extends State<MihomoApp> {
       settingsController: widget.settingsController,
     ),
     MihomoInfo(key: ValueKey('info$_connKey'), api: _api),
-    SettingsPage(controller: widget.settingsController),
+    SettingsPage(controller: widget.settingsController, api: _api),
   ];
 
   List<BottomNavigationBarItem> items(AppLocalizations l10n) => [

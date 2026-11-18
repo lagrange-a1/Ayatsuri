@@ -182,13 +182,6 @@ class _MihomoInfoState extends State<MihomoInfo> {
           ),
         ],
       ),
-      floatingActionButton: _version != null && !_loading
-          ? FloatingActionButton(
-              onPressed: _fetchEverything,
-              tooltip: l10n.fetchAll,
-              child: const Icon(Icons.refresh),
-            )
-          : null,
       // Loading takes precedence over the empty/error states while a fetch
       // is in flight (initial load, nothing to show yet): show a spinner,
       // not the "no data" placeholder. With data already loaded a refresh

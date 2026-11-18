@@ -9,10 +9,11 @@ import 'mihomo_info.dart';
 
 /// Structured dashboard for the Info tab.
 ///
-/// Renders [summary] (parsed from the nine controller endpoints by
-/// `MihomoInfoSummary`) as header stat cards plus per-section summary
-/// rows and bar breakdowns. Each section keeps a collapsible raw-JSON
-/// fallback ([rawBySection]) for the original payload.
+/// Renders [summary] as header stat cards plus per-section summary rows and
+/// bar breakdowns. The four everyday sections stay visible; the five
+/// diagnostic sections sit behind a collapsed tile so the page reads as a
+/// node-picker companion first and a dev dashboard second. Every section
+/// keeps a collapsible raw-JSON fallback ([rawBySection]).
 class InfoDashboard extends StatelessWidget {
   const InfoDashboard({
     super.key,
@@ -27,6 +28,7 @@ class InfoDashboard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final zh = Localizations.localeOf(context).languageCode == 'zh';
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
@@ -36,11 +38,29 @@ class InfoDashboard extends StatelessWidget {
         _ConfigsSection(summary: summary, raw: rawBySection['configs']),
         _ProxiesSection(summary: summary, raw: rawBySection['proxies']),
         _GroupsSection(summary: summary, raw: rawBySection['groups']),
-        _RulesSection(summary: summary, raw: rawBySection['rules']),
-        _ConnectionsSection(summary: summary, raw: rawBySection['connections']),
-        _TrafficSection(summary: summary, raw: rawBySection['traffic']),
-        _MemorySection(summary: summary, raw: rawBySection['memory']),
-        _LogsSection(summary: summary, raw: rawBySection['logs']),
+        // Dev diagnostics stay one tap away but no longer compete with the
+        // four sections a node picker actually uses. Kept collapsed by
+        // default; nothing is removed from the controller payload.
+        ExpansionTile(
+          key: const ValueKey('info-diagnostics'),
+          initiallyExpanded: false,
+          title: Text(zh ? '更多诊断信息' : 'More diagnostics'),
+          subtitle: Text(
+            zh
+                ? '规则 · 连接 · 流量 · 内存 · 日志'
+                : 'Rules · Connections · Traffic · Memory · Logs',
+          ),
+          children: [
+            _RulesSection(summary: summary, raw: rawBySection['rules']),
+            _ConnectionsSection(
+              summary: summary,
+              raw: rawBySection['connections'],
+            ),
+            _TrafficSection(summary: summary, raw: rawBySection['traffic']),
+            _MemorySection(summary: summary, raw: rawBySection['memory']),
+            _LogsSection(summary: summary, raw: rawBySection['logs']),
+          ],
+        ),
       ],
     );
   }

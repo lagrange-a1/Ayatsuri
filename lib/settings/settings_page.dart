@@ -2,6 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:ayatsuri/l10n/app_localizations.dart';
 
+import '../data/endpoints.dart';
+import 'advanced_console.dart';
 import 'app_settings.dart';
 
 const _seedPresets = <Color>[
@@ -49,8 +51,12 @@ String _smartLabel(BuildContext context, String zh, String en) =>
     Localizations.localeOf(context).languageCode == 'zh' ? zh : en;
 
 class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key, required this.controller});
+  const SettingsPage({super.key, required this.controller, this.api});
   final AppSettingsController controller;
+
+  /// Shared, already-authenticated client from the app shell. When absent
+  /// (widget tests) a client is built from the current settings on rebuild.
+  final MihomoAPI? api;
 
   @override
   Widget build(BuildContext context) {
@@ -59,6 +65,8 @@ class SettingsPage extends StatelessWidget {
       builder: (context, _) {
         final s = controller.settings;
         final l10n = AppLocalizations.of(context);
+        final api =
+            this.api ?? MihomoAPI(baseUrl: s.serverUrl, secret: s.secret);
         void set(AppSettings next) => controller.update(next);
         return Scaffold(
           appBar: AppBar(title: Text(l10n.settingsTitle)),
@@ -420,6 +428,10 @@ class SettingsPage extends StatelessWidget {
                   _smartLabel(context, '地球节点选择器', 'Globe-based node picker'),
                 ),
               ),
+              // Advanced escape hatch stays last, with no extra badge: users
+              // who only pick a country never scroll this far.
+              const Divider(height: 32),
+              AdvancedConsole(api: api),
             ],
           ),
         );

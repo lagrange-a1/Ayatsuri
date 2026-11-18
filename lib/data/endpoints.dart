@@ -245,6 +245,44 @@ class MihomoAPI {
       ..receiveTimeout = const Duration(seconds: 30);
   }
 
+  // ── Arbitrary requests (advanced console) ───────────────────────────
+
+  /// Sends a caller-built request through the *same* authenticated Dio as
+  /// every other API call. Used by the settings advanced console so users
+  /// can pick a controller endpoint or type a raw command without a second
+  /// HTTP implementation drifting from the auth/base-url rules above.
+  ///
+  /// [path] is relative to the controller base URL; absolute URLs are
+  /// rejected so a typo cannot turn the console into a generic HTTP client.
+  Future<Response> requestRaw(String method, String path, {Object? data}) {
+    final m = method.trim().toUpperCase();
+    var p = path.trim();
+    if (p.isEmpty) p = '/';
+    // Be forgiving in the console: "version" and "/version" mean the same.
+    if (!p.startsWith('/')) p = '/$p';
+    if (p.startsWith('//') || p.contains('://')) {
+      throw ArgumentError.value(
+        path,
+        'path',
+        'must be a controller-relative path starting with /',
+      );
+    }
+    switch (m) {
+      case 'GET':
+        return _dio.get<dynamic>(p);
+      case 'PUT':
+        return _dio.put<dynamic>(p, data: data);
+      case 'PATCH':
+        return _dio.patch<dynamic>(p, data: data);
+      case 'POST':
+        return _dio.post<dynamic>(p, data: data);
+      case 'DELETE':
+        return _dio.delete<dynamic>(p);
+      default:
+        throw ArgumentError.value(method, 'method', 'unsupported HTTP method');
+    }
+  }
+
   bool _dioInitialized = false;
 
   // ── Version ──────────────────────────────────────────────────────────
