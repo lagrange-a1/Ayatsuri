@@ -23,6 +23,18 @@ jobs:
           channel: stable
           flutter-version: '3.38.7'
 
+      # The scheduler is a real Rust cdylib: build it for all split ABIs
+      # before Flutter/Gradle packages jniLibs into each APK.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv7-linux-androideabi,aarch64-linux-android,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build Rust scheduler (Android ABIs)
+        run: ./scripts/build-rust-android.sh
+
       - name: Flutter doctor
         run: flutter doctor -v
 

@@ -52,6 +52,7 @@ void main() {
       compactNodeList: true,
       backgroundOpacity: 0.4,
       locale: AppLocale.zh,
+      autoApplyRecommendation: true,
       serverUrl: 'http://192.168.0.2:9091',
       secret: 'foobar',
     );
@@ -73,6 +74,7 @@ void main() {
     expect(restored.compactNodeList, isTrue);
     expect(restored.backgroundOpacity, 0.4);
     expect(restored.locale, AppLocale.zh);
+    expect(restored.autoApplyRecommendation, isTrue);
     expect(restored.serverUrl, 'http://192.168.0.2:9091');
     expect(restored.secret, 'foobar');
     expect(restored.locale.flutterLocale, const Locale('zh'));

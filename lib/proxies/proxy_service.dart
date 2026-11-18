@@ -13,6 +13,7 @@ import 'package:ayatsuri/l10n/app_localizations.dart';
 import '../data/endpoints.dart';
 import 'country_map.dart';
 import 'probe_history.dart';
+import 'scheduler_wrapper.dart';
 import 'smart_selector.dart';
 
 class ProxyItem {
@@ -78,7 +79,12 @@ class ProxySelection {
   ProbeStats? statsFor(String name) => _selector.statsFor(name);
 
   /// Non-destructive routing suggestion; does not switch any node.
-  String? bestProxy({String? current}) => _selector.best(current: current);
+  Future<String?> bestProxy({Iterable<String>? candidates, String? current}) =>
+      _selector.best(candidates: candidates, current: current);
+
+  /// Full Rust/Dart ranking for the given candidates, best first.
+  Future<List<NodeRank>> rankProxies(Iterable<String> candidates) =>
+      _selector.scheduler.rank(candidates);
 
   Map<String, ProxyItem>? _proxies;
   List<GroupItem>? _groups;

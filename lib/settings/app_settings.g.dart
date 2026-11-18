@@ -53,6 +53,7 @@ _AppSettings _$AppSettingsFromJson(Map<String, dynamic> json) => _AppSettings(
       AppLocale.system,
   emaAlpha: (json['emaAlpha'] as num?)?.toDouble() ?? 0.2,
   hysteresisMs: (json['hysteresisMs'] as num?)?.toInt() ?? 50,
+  autoApplyRecommendation: json['autoApplyRecommendation'] as bool? ?? false,
 );
 
 Map<String, dynamic> _$AppSettingsToJson(_AppSettings instance) =>
@@ -85,6 +86,7 @@ Map<String, dynamic> _$AppSettingsToJson(_AppSettings instance) =>
       'locale': _$AppLocaleEnumMap[instance.locale]!,
       'emaAlpha': instance.emaAlpha,
       'hysteresisMs': instance.hysteresisMs,
+      'autoApplyRecommendation': instance.autoApplyRecommendation,
     };
 
 const _$ThemeModeEnumMap = {

@@ -54,7 +54,9 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
       RustLibWire.fromExternalLibrary;
 
   @override
-  Future<void> executeRustInitializers() async {}
+  Future<void> executeRustInitializers() async {
+    await api.crateSchedulerLibInit();
+  }
 
   @override
   ExternalLibraryLoaderConfig get defaultExternalLibraryLoaderConfig =>
@@ -64,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -1786591060;
+  int get rustContentHash => 789060814;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -76,29 +78,66 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
-  Future<void> crateSchedulerAddTask({
-    required Scheduler that,
-    required Task task,
+  Future<NodeStats?> crateLatencySchedulerBest({
+    required LatencyScheduler that,
+    required Uint64List candidates,
+    BigInt? current,
+    required BigInt nowMs,
   });
 
-  Future<void> crateSchedulerLibInit();
+  Future<void> crateLatencySchedulerClear({required LatencyScheduler that});
 
-  Future<Scheduler> crateSchedulerNew();
+  Future<void> crateLatencySchedulerConfigure({
+    required LatencyScheduler that,
+    required SchedulerConfig config,
+  });
 
-  Future<Task?> crateSchedulerNextTask({required Scheduler that});
+  Future<void> crateLatencySchedulerFail({
+    required LatencyScheduler that,
+    required BigInt id,
+    required bool timeout,
+    required BigInt nowMs,
+  });
 
-  Future<bool> crateSchedulerRemoveTask({
-    required Scheduler that,
+  Future<LatencyScheduler> crateLatencySchedulerNew({
+    required SchedulerConfig config,
+  });
+
+  Future<void> crateLatencySchedulerObserve({
+    required LatencyScheduler that,
+    required BigInt id,
+    required BigInt latencyMs,
+    required BigInt nowMs,
+  });
+
+  Future<List<NodeStats>> crateLatencySchedulerRank({
+    required LatencyScheduler that,
+    required Uint64List candidates,
+    required BigInt nowMs,
+  });
+
+  Future<void> crateLatencySchedulerRemove({
+    required LatencyScheduler that,
     required BigInt id,
   });
 
+  Future<NodeStats?> crateLatencySchedulerStats({
+    required LatencyScheduler that,
+    required BigInt id,
+  });
+
+  Future<SchedulerConfig> crateSchedulerConfigDefault();
+
+  Future<void> crateSchedulerLibInit();
+
   RustArcIncrementStrongCountFnType
-  get rust_arc_increment_strong_count_Scheduler;
+  get rust_arc_increment_strong_count_LatencyScheduler;
 
   RustArcDecrementStrongCountFnType
-  get rust_arc_decrement_strong_count_Scheduler;
+  get rust_arc_decrement_strong_count_LatencyScheduler;
 
-  CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_SchedulerPtr;
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_LatencySchedulerPtr;
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -110,19 +149,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
-  Future<void> crateSchedulerAddTask({
-    required Scheduler that,
-    required Task task,
+  Future<NodeStats?> crateLatencySchedulerBest({
+    required LatencyScheduler that,
+    required Uint64List candidates,
+    BigInt? current,
+    required BigInt nowMs,
   }) {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
             that,
             serializer,
           );
-          sse_encode_box_autoadd_task(task, serializer);
+          sse_encode_list_prim_u_64_strict(candidates, serializer);
+          sse_encode_opt_box_autoadd_u_64(current, serializer);
+          sse_encode_u_64(nowMs, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -131,20 +174,348 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
+          decodeSuccessData: sse_decode_opt_box_autoadd_node_stats,
           decodeErrorData: null,
         ),
-        constMeta: kCrateSchedulerAddTaskConstMeta,
-        argValues: [that, task],
+        constMeta: kCrateLatencySchedulerBestConstMeta,
+        argValues: [that, candidates, current, nowMs],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateSchedulerAddTaskConstMeta => const TaskConstMeta(
-    debugName: "scheduler_add_task",
-    argNames: ["that", "task"],
+  TaskConstMeta get kCrateLatencySchedulerBestConstMeta => const TaskConstMeta(
+    debugName: "LatencyScheduler_best",
+    argNames: ["that", "candidates", "current", "nowMs"],
   );
+
+  @override
+  Future<void> crateLatencySchedulerClear({required LatencyScheduler that}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 2,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateLatencySchedulerClearConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateLatencySchedulerClearConstMeta => const TaskConstMeta(
+    debugName: "LatencyScheduler_clear",
+    argNames: ["that"],
+  );
+
+  @override
+  Future<void> crateLatencySchedulerConfigure({
+    required LatencyScheduler that,
+    required SchedulerConfig config,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+            that,
+            serializer,
+          );
+          sse_encode_box_autoadd_scheduler_config(config, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 3,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateLatencySchedulerConfigureConstMeta,
+        argValues: [that, config],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateLatencySchedulerConfigureConstMeta =>
+      const TaskConstMeta(
+        debugName: "LatencyScheduler_configure",
+        argNames: ["that", "config"],
+      );
+
+  @override
+  Future<void> crateLatencySchedulerFail({
+    required LatencyScheduler that,
+    required BigInt id,
+    required bool timeout,
+    required BigInt nowMs,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+            that,
+            serializer,
+          );
+          sse_encode_u_64(id, serializer);
+          sse_encode_bool(timeout, serializer);
+          sse_encode_u_64(nowMs, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 4,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateLatencySchedulerFailConstMeta,
+        argValues: [that, id, timeout, nowMs],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateLatencySchedulerFailConstMeta => const TaskConstMeta(
+    debugName: "LatencyScheduler_fail",
+    argNames: ["that", "id", "timeout", "nowMs"],
+  );
+
+  @override
+  Future<LatencyScheduler> crateLatencySchedulerNew({
+    required SchedulerConfig config,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_box_autoadd_scheduler_config(config, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 5,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData:
+              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateLatencySchedulerNewConstMeta,
+        argValues: [config],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateLatencySchedulerNewConstMeta => const TaskConstMeta(
+    debugName: "LatencyScheduler_new",
+    argNames: ["config"],
+  );
+
+  @override
+  Future<void> crateLatencySchedulerObserve({
+    required LatencyScheduler that,
+    required BigInt id,
+    required BigInt latencyMs,
+    required BigInt nowMs,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+            that,
+            serializer,
+          );
+          sse_encode_u_64(id, serializer);
+          sse_encode_u_64(latencyMs, serializer);
+          sse_encode_u_64(nowMs, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 6,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateLatencySchedulerObserveConstMeta,
+        argValues: [that, id, latencyMs, nowMs],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateLatencySchedulerObserveConstMeta =>
+      const TaskConstMeta(
+        debugName: "LatencyScheduler_observe",
+        argNames: ["that", "id", "latencyMs", "nowMs"],
+      );
+
+  @override
+  Future<List<NodeStats>> crateLatencySchedulerRank({
+    required LatencyScheduler that,
+    required Uint64List candidates,
+    required BigInt nowMs,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+            that,
+            serializer,
+          );
+          sse_encode_list_prim_u_64_strict(candidates, serializer);
+          sse_encode_u_64(nowMs, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 7,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_node_stats,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateLatencySchedulerRankConstMeta,
+        argValues: [that, candidates, nowMs],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateLatencySchedulerRankConstMeta => const TaskConstMeta(
+    debugName: "LatencyScheduler_rank",
+    argNames: ["that", "candidates", "nowMs"],
+  );
+
+  @override
+  Future<void> crateLatencySchedulerRemove({
+    required LatencyScheduler that,
+    required BigInt id,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+            that,
+            serializer,
+          );
+          sse_encode_u_64(id, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 8,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateLatencySchedulerRemoveConstMeta,
+        argValues: [that, id],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateLatencySchedulerRemoveConstMeta =>
+      const TaskConstMeta(
+        debugName: "LatencyScheduler_remove",
+        argNames: ["that", "id"],
+      );
+
+  @override
+  Future<NodeStats?> crateLatencySchedulerStats({
+    required LatencyScheduler that,
+    required BigInt id,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+            that,
+            serializer,
+          );
+          sse_encode_u_64(id, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 9,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_node_stats,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateLatencySchedulerStatsConstMeta,
+        argValues: [that, id],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateLatencySchedulerStatsConstMeta => const TaskConstMeta(
+    debugName: "LatencyScheduler_stats",
+    argNames: ["that", "id"],
+  );
+
+  @override
+  Future<SchedulerConfig> crateSchedulerConfigDefault() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 10,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_scheduler_config,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateSchedulerConfigDefaultConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateSchedulerConfigDefaultConstMeta =>
+      const TaskConstMeta(debugName: "scheduler_config_default", argNames: []);
 
   @override
   Future<void> crateSchedulerLibInit() {
@@ -155,7 +526,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 2,
+            funcId: 11,
             port: port_,
           );
         },
@@ -173,125 +544,48 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateSchedulerLibInitConstMeta =>
       const TaskConstMeta(debugName: "scheduler_lib_init", argNames: []);
 
-  @override
-  Future<Scheduler> crateSchedulerNew() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 3,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_scheduler,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateSchedulerNewConstMeta,
-        argValues: [],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateSchedulerNewConstMeta =>
-      const TaskConstMeta(debugName: "scheduler_new", argNames: []);
-
-  @override
-  Future<Task?> crateSchedulerNextTask({required Scheduler that}) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
-            that,
-            serializer,
-          );
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 4,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_opt_box_autoadd_task,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateSchedulerNextTaskConstMeta,
-        argValues: [that],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateSchedulerNextTaskConstMeta =>
-      const TaskConstMeta(debugName: "scheduler_next_task", argNames: ["that"]);
-
-  @override
-  Future<bool> crateSchedulerRemoveTask({
-    required Scheduler that,
-    required BigInt id,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
-            that,
-            serializer,
-          );
-          sse_encode_u_64(id, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 5,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_bool,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateSchedulerRemoveTaskConstMeta,
-        argValues: [that, id],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateSchedulerRemoveTaskConstMeta => const TaskConstMeta(
-    debugName: "scheduler_remove_task",
-    argNames: ["that", "id"],
-  );
-
   RustArcIncrementStrongCountFnType
-  get rust_arc_increment_strong_count_Scheduler => wire
-      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler;
+  get rust_arc_increment_strong_count_LatencyScheduler => wire
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler;
 
   RustArcDecrementStrongCountFnType
-  get rust_arc_decrement_strong_count_Scheduler => wire
-      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler;
+  get rust_arc_decrement_strong_count_LatencyScheduler => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler;
 
   @protected
-  Scheduler
-  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
+  LatencyScheduler
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
     dynamic raw,
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return SchedulerImpl.frbInternalDcoDecode(raw as List<dynamic>);
+    return LatencySchedulerImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
-  Scheduler
-  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
+  LatencyScheduler
+  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
     dynamic raw,
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return SchedulerImpl.frbInternalDcoDecode(raw as List<dynamic>);
+    return LatencySchedulerImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  LatencyScheduler
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return LatencySchedulerImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  LatencyScheduler
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return LatencySchedulerImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
@@ -301,39 +595,95 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  Task dco_decode_box_autoadd_task(dynamic raw) {
+  NodeStats dco_decode_box_autoadd_node_stats(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return dco_decode_task(raw);
+    return dco_decode_node_stats(raw);
   }
 
   @protected
-  List<Task> dco_decode_list_task(dynamic raw) {
+  SchedulerConfig dco_decode_box_autoadd_scheduler_config(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return (raw as List<dynamic>).map(dco_decode_task).toList();
+    return dco_decode_scheduler_config(raw);
   }
 
   @protected
-  Task? dco_decode_opt_box_autoadd_task(dynamic raw) {
+  BigInt dco_decode_box_autoadd_u_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw == null ? null : dco_decode_box_autoadd_task(raw);
+    return dco_decode_u_64(raw);
   }
 
   @protected
-  Scheduler dco_decode_scheduler(dynamic raw) {
+  double dco_decode_f_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as double;
+  }
+
+  @protected
+  List<NodeStats> dco_decode_list_node_stats(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_node_stats).toList();
+  }
+
+  @protected
+  Uint64List dco_decode_list_prim_u_64_strict(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dcoDecodeUint64List(raw);
+  }
+
+  @protected
+  NodeStats dco_decode_node_stats(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 1)
-      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
-    return Scheduler(tasks: dco_decode_list_task(arr[0]));
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    return NodeStats(
+      id: dco_decode_u_64(arr[0]),
+      ewma: dco_decode_f_64(arr[1]),
+      jitter: dco_decode_f_64(arr[2]),
+      samples: dco_decode_u_32(arr[3]),
+      failures: dco_decode_u_32(arr[4]),
+      available: dco_decode_bool(arr[5]),
+      score: dco_decode_f_64(arr[6]),
+      ageMs: dco_decode_u_64(arr[7]),
+    );
   }
 
   @protected
-  Task dco_decode_task(dynamic raw) {
+  NodeStats? dco_decode_opt_box_autoadd_node_stats(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_node_stats(raw);
+  }
+
+  @protected
+  BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_u_64(raw);
+  }
+
+  @protected
+  SchedulerConfig dco_decode_scheduler_config(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
-    return Task(id: dco_decode_u_64(arr[0]), latency: dco_decode_u_64(arr[1]));
+    if (arr.length != 10)
+      throw Exception('unexpected arr length: expect 10 but see ${arr.length}');
+    return SchedulerConfig(
+      alpha: dco_decode_f_64(arr[0]),
+      jitterWeight: dco_decode_f_64(arr[1]),
+      failurePenaltyMs: dco_decode_f_64(arr[2]),
+      stalePenaltyMs: dco_decode_f_64(arr[3]),
+      hysteresisMs: dco_decode_f_64(arr[4]),
+      cooldownMs: dco_decode_u_64(arr[5]),
+      maxFailures: dco_decode_u_32(arr[6]),
+      staleAfterMs: dco_decode_u_64(arr[7]),
+      exploreMinSamples: dco_decode_u_32(arr[8]),
+      exploreBonusMs: dco_decode_f_64(arr[9]),
+    );
+  }
+
+  @protected
+  int dco_decode_u_32(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
   }
 
   @protected
@@ -355,24 +705,48 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  Scheduler
-  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
+  LatencyScheduler
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return SchedulerImpl.frbInternalSseDecode(
+    return LatencySchedulerImpl.frbInternalSseDecode(
       sse_decode_usize(deserializer),
       sse_decode_i_32(deserializer),
     );
   }
 
   @protected
-  Scheduler
-  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
+  LatencyScheduler
+  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return SchedulerImpl.frbInternalSseDecode(
+    return LatencySchedulerImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  LatencyScheduler
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return LatencySchedulerImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  LatencyScheduler
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return LatencySchedulerImpl.frbInternalSseDecode(
       sse_decode_usize(deserializer),
       sse_decode_i_32(deserializer),
     );
@@ -385,47 +759,128 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  Task sse_decode_box_autoadd_task(SseDeserializer deserializer) {
+  NodeStats sse_decode_box_autoadd_node_stats(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return (sse_decode_task(deserializer));
+    return (sse_decode_node_stats(deserializer));
   }
 
   @protected
-  List<Task> sse_decode_list_task(SseDeserializer deserializer) {
+  SchedulerConfig sse_decode_box_autoadd_scheduler_config(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_scheduler_config(deserializer));
+  }
+
+  @protected
+  BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_u_64(deserializer));
+  }
+
+  @protected
+  double sse_decode_f_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getFloat64();
+  }
+
+  @protected
+  List<NodeStats> sse_decode_list_node_stats(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     var len_ = sse_decode_i_32(deserializer);
-    var ans_ = <Task>[];
+    var ans_ = <NodeStats>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
-      ans_.add(sse_decode_task(deserializer));
+      ans_.add(sse_decode_node_stats(deserializer));
     }
     return ans_;
   }
 
   @protected
-  Task? sse_decode_opt_box_autoadd_task(SseDeserializer deserializer) {
+  Uint64List sse_decode_list_prim_u_64_strict(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var len_ = sse_decode_i_32(deserializer);
+    return deserializer.buffer.getUint64List(len_);
+  }
+
+  @protected
+  NodeStats sse_decode_node_stats(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_u_64(deserializer);
+    var var_ewma = sse_decode_f_64(deserializer);
+    var var_jitter = sse_decode_f_64(deserializer);
+    var var_samples = sse_decode_u_32(deserializer);
+    var var_failures = sse_decode_u_32(deserializer);
+    var var_available = sse_decode_bool(deserializer);
+    var var_score = sse_decode_f_64(deserializer);
+    var var_ageMs = sse_decode_u_64(deserializer);
+    return NodeStats(
+      id: var_id,
+      ewma: var_ewma,
+      jitter: var_jitter,
+      samples: var_samples,
+      failures: var_failures,
+      available: var_available,
+      score: var_score,
+      ageMs: var_ageMs,
+    );
+  }
+
+  @protected
+  NodeStats? sse_decode_opt_box_autoadd_node_stats(
+    SseDeserializer deserializer,
+  ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
-      return (sse_decode_box_autoadd_task(deserializer));
+      return (sse_decode_box_autoadd_node_stats(deserializer));
     } else {
       return null;
     }
   }
 
   @protected
-  Scheduler sse_decode_scheduler(SseDeserializer deserializer) {
+  BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_tasks = sse_decode_list_task(deserializer);
-    return Scheduler(tasks: var_tasks);
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_u_64(deserializer));
+    } else {
+      return null;
+    }
   }
 
   @protected
-  Task sse_decode_task(SseDeserializer deserializer) {
+  SchedulerConfig sse_decode_scheduler_config(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_id = sse_decode_u_64(deserializer);
-    var var_latency = sse_decode_u_64(deserializer);
-    return Task(id: var_id, latency: var_latency);
+    var var_alpha = sse_decode_f_64(deserializer);
+    var var_jitterWeight = sse_decode_f_64(deserializer);
+    var var_failurePenaltyMs = sse_decode_f_64(deserializer);
+    var var_stalePenaltyMs = sse_decode_f_64(deserializer);
+    var var_hysteresisMs = sse_decode_f_64(deserializer);
+    var var_cooldownMs = sse_decode_u_64(deserializer);
+    var var_maxFailures = sse_decode_u_32(deserializer);
+    var var_staleAfterMs = sse_decode_u_64(deserializer);
+    var var_exploreMinSamples = sse_decode_u_32(deserializer);
+    var var_exploreBonusMs = sse_decode_f_64(deserializer);
+    return SchedulerConfig(
+      alpha: var_alpha,
+      jitterWeight: var_jitterWeight,
+      failurePenaltyMs: var_failurePenaltyMs,
+      stalePenaltyMs: var_stalePenaltyMs,
+      hysteresisMs: var_hysteresisMs,
+      cooldownMs: var_cooldownMs,
+      maxFailures: var_maxFailures,
+      staleAfterMs: var_staleAfterMs,
+      exploreMinSamples: var_exploreMinSamples,
+      exploreBonusMs: var_exploreBonusMs,
+    );
+  }
+
+  @protected
+  int sse_decode_u_32(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getUint32();
   }
 
   @protected
@@ -453,26 +908,52 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
-  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
-    Scheduler self,
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    LatencyScheduler self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-      (self as SchedulerImpl).frbInternalSseEncode(move: false),
+      (self as LatencySchedulerImpl).frbInternalSseEncode(move: true),
       serializer,
     );
   }
 
   @protected
   void
-  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
-    Scheduler self,
+  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    LatencyScheduler self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-      (self as SchedulerImpl).frbInternalSseEncode(move: null),
+      (self as LatencySchedulerImpl).frbInternalSseEncode(move: false),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    LatencyScheduler self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as LatencySchedulerImpl).frbInternalSseEncode(move: false),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    LatencyScheduler self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as LatencySchedulerImpl).frbInternalSseEncode(move: null),
       serializer,
     );
   }
@@ -484,41 +965,115 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_box_autoadd_task(Task self, SseSerializer serializer) {
+  void sse_encode_box_autoadd_node_stats(
+    NodeStats self,
+    SseSerializer serializer,
+  ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_task(self, serializer);
+    sse_encode_node_stats(self, serializer);
   }
 
   @protected
-  void sse_encode_list_task(List<Task> self, SseSerializer serializer) {
+  void sse_encode_box_autoadd_scheduler_config(
+    SchedulerConfig self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_scheduler_config(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_64(self, serializer);
+  }
+
+  @protected
+  void sse_encode_f_64(double self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putFloat64(self);
+  }
+
+  @protected
+  void sse_encode_list_node_stats(
+    List<NodeStats> self,
+    SseSerializer serializer,
+  ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
-      sse_encode_task(item, serializer);
+      sse_encode_node_stats(item, serializer);
     }
   }
 
   @protected
-  void sse_encode_opt_box_autoadd_task(Task? self, SseSerializer serializer) {
+  void sse_encode_list_prim_u_64_strict(
+    Uint64List self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    serializer.buffer.putUint64List(self);
+  }
+
+  @protected
+  void sse_encode_node_stats(NodeStats self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_64(self.id, serializer);
+    sse_encode_f_64(self.ewma, serializer);
+    sse_encode_f_64(self.jitter, serializer);
+    sse_encode_u_32(self.samples, serializer);
+    sse_encode_u_32(self.failures, serializer);
+    sse_encode_bool(self.available, serializer);
+    sse_encode_f_64(self.score, serializer);
+    sse_encode_u_64(self.ageMs, serializer);
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_node_stats(
+    NodeStats? self,
+    SseSerializer serializer,
+  ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     sse_encode_bool(self != null, serializer);
     if (self != null) {
-      sse_encode_box_autoadd_task(self, serializer);
+      sse_encode_box_autoadd_node_stats(self, serializer);
     }
   }
 
   @protected
-  void sse_encode_scheduler(Scheduler self, SseSerializer serializer) {
+  void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_list_task(self.tasks, serializer);
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_u_64(self, serializer);
+    }
   }
 
   @protected
-  void sse_encode_task(Task self, SseSerializer serializer) {
+  void sse_encode_scheduler_config(
+    SchedulerConfig self,
+    SseSerializer serializer,
+  ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_u_64(self.id, serializer);
-    sse_encode_u_64(self.latency, serializer);
+    sse_encode_f_64(self.alpha, serializer);
+    sse_encode_f_64(self.jitterWeight, serializer);
+    sse_encode_f_64(self.failurePenaltyMs, serializer);
+    sse_encode_f_64(self.stalePenaltyMs, serializer);
+    sse_encode_f_64(self.hysteresisMs, serializer);
+    sse_encode_u_64(self.cooldownMs, serializer);
+    sse_encode_u_32(self.maxFailures, serializer);
+    sse_encode_u_64(self.staleAfterMs, serializer);
+    sse_encode_u_32(self.exploreMinSamples, serializer);
+    sse_encode_f_64(self.exploreBonusMs, serializer);
+  }
+
+  @protected
+  void sse_encode_u_32(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putUint32(self);
   }
 
   @protected
@@ -546,36 +1101,89 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 }
 
 @sealed
-class SchedulerImpl extends RustOpaque implements Scheduler {
+class LatencySchedulerImpl extends RustOpaque implements LatencyScheduler {
   // Not to be used by end users
-  SchedulerImpl.frbInternalDcoDecode(List<dynamic> wire)
+  LatencySchedulerImpl.frbInternalDcoDecode(List<dynamic> wire)
     : super.frbInternalDcoDecode(wire, _kStaticData);
 
   // Not to be used by end users
-  SchedulerImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
-    : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
+  LatencySchedulerImpl.frbInternalSseDecode(
+    BigInt ptr,
+    int externalSizeOnNative,
+  ) : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
 
   static final _kStaticData = RustArcStaticData(
     rustArcIncrementStrongCount:
-        RustLib.instance.api.rust_arc_increment_strong_count_Scheduler,
+        RustLib.instance.api.rust_arc_increment_strong_count_LatencyScheduler,
     rustArcDecrementStrongCount:
-        RustLib.instance.api.rust_arc_decrement_strong_count_Scheduler,
-    rustArcDecrementStrongCountPtr:
-        RustLib.instance.api.rust_arc_decrement_strong_count_SchedulerPtr,
+        RustLib.instance.api.rust_arc_decrement_strong_count_LatencyScheduler,
+    rustArcDecrementStrongCountPtr: RustLib
+        .instance
+        .api
+        .rust_arc_decrement_strong_count_LatencySchedulerPtr,
   );
 
-  /// frb_marker: #[frb()]
-  Future<void> addTask({required Task task}) =>
-      RustLib.instance.api.crateSchedulerAddTask(that: this, task: task);
+  /// Choose the best candidate, keeping `current` unless the improvement
+  /// exceeds hysteresis and the cooldown has elapsed.
+  Future<NodeStats?> best({
+    required Uint64List candidates,
+    BigInt? current,
+    required BigInt nowMs,
+  }) => RustLib.instance.api.crateLatencySchedulerBest(
+    that: this,
+    candidates: candidates,
+    current: current,
+    nowMs: nowMs,
+  );
 
-  /// frb_marker: #[frb()]
-  Future<Task?> nextTask() =>
-      RustLib.instance.api.crateSchedulerNextTask(that: this);
+  Future<void> clear() =>
+      RustLib.instance.api.crateLatencySchedulerClear(that: this);
 
-  /// frb_marker: #[frb()]
-  Future<bool> removeTask({required BigInt id}) =>
-      RustLib.instance.api.crateSchedulerRemoveTask(that: this, id: id);
+  /// Hot-apply settings without discarding observed samples.
+  Future<void> configure({required SchedulerConfig config}) => RustLib
+      .instance
+      .api
+      .crateLatencySchedulerConfigure(that: this, config: config);
 
-  @override
-  List<Task> get tasks => <Task>[];
+  /// Record a failed probe. A timeout counts double: it consumed the full
+  /// timeout budget rather than being answered promptly as "blocked".
+  Future<void> fail({
+    required BigInt id,
+    required bool timeout,
+    required BigInt nowMs,
+  }) => RustLib.instance.api.crateLatencySchedulerFail(
+    that: this,
+    id: id,
+    timeout: timeout,
+    nowMs: nowMs,
+  );
+
+  /// Record a successful probe. `latency_ms` must be positive; blocked and
+  /// timeout results go through `fail` instead.
+  Future<void> observe({
+    required BigInt id,
+    required BigInt latencyMs,
+    required BigInt nowMs,
+  }) => RustLib.instance.api.crateLatencySchedulerObserve(
+    that: this,
+    id: id,
+    latencyMs: latencyMs,
+    nowMs: nowMs,
+  );
+
+  /// All available candidates sorted by score (ascending), non-destructive.
+  Future<List<NodeStats>> rank({
+    required Uint64List candidates,
+    required BigInt nowMs,
+  }) => RustLib.instance.api.crateLatencySchedulerRank(
+    that: this,
+    candidates: candidates,
+    nowMs: nowMs,
+  );
+
+  Future<void> remove({required BigInt id}) =>
+      RustLib.instance.api.crateLatencySchedulerRemove(that: this, id: id);
+
+  Future<NodeStats?> stats({required BigInt id}) =>
+      RustLib.instance.api.crateLatencySchedulerStats(that: this, id: id);
 }

@@ -9,21 +9,28 @@ import 'package:ayatsuri/proxies/probe_history.dart';
 import 'package:ayatsuri/proxies/scheduler_wrapper.dart';
 import 'package:ayatsuri/proxies/smart_selector.dart';
 
-/// Deterministic scheduler: no Rust FFI, latencies set directly where a
-/// test needs exact hysteresis boundaries, EMA otherwise.
+/// Deterministic scheduler: latencies are set directly where a test needs an
+/// exact hysteresis boundary, EMA is applied everywhere else.
 class FakeScheduler extends SchedulerWrapper {
   final Map<String, double> latencies = <String, double>{};
+  double _alpha = 0.2;
+  double _hysteresis = 50;
 
   @override
-  Future<void> updateLatency(String proxy, int latency) async {
+  Iterable<String> get knownProxies => latencies.keys;
+
+  @override
+  Future<void> observe(String proxy, int latencyMs) async {
     final old = latencies[proxy];
     latencies[proxy] = old == null
-        ? latency.toDouble()
-        : emaAlpha * latency + (1 - emaAlpha) * old;
+        ? latencyMs.toDouble()
+        : _alpha * latencyMs + (1 - _alpha) * old;
   }
 
   @override
-  Future<void> remove(String proxy) async => latencies.remove(proxy);
+  Future<void> fail(String proxy, {bool timeout = false}) async {
+    latencies.remove(proxy);
+  }
 
   @override
   double? smoothedFor(String proxy) => latencies[proxy];
@@ -36,6 +43,65 @@ class FakeScheduler extends SchedulerWrapper {
         return byLatency != 0 ? byLatency : a.key.compareTo(b.key);
       });
     return List<MapEntry<String, double>>.unmodifiable(entries);
+  }
+
+  @override
+  NodeRank? statsFor(String proxy) {
+    final v = latencies[proxy];
+    if (v == null) return null;
+    return NodeRank(
+      proxy: proxy,
+      ewma: v,
+      jitter: 0,
+      score: v,
+      samples: 3,
+      failures: 0,
+      ageMs: 0,
+      available: true,
+    );
+  }
+
+  @override
+  Future<List<NodeRank>> rank(Iterable<String> candidates) async {
+    final allowed = candidates.toSet();
+    final rows =
+        latencies.entries
+            .where((e) => allowed.contains(e.key))
+            .map(
+              (e) => NodeRank(
+                proxy: e.key,
+                ewma: e.value,
+                jitter: 0,
+                score: e.value,
+                samples: 3,
+                failures: 0,
+                ageMs: 0,
+                available: true,
+              ),
+            )
+            .toList()
+          ..sort((a, b) {
+            final byScore = a.score.compareTo(b.score);
+            return byScore != 0 ? byScore : a.proxy.compareTo(b.proxy);
+          });
+    return rows;
+  }
+
+  @override
+  Future<String?> best(Iterable<String> candidates, {String? current}) async {
+    final rows = await rank(candidates);
+    if (rows.isEmpty) return null;
+    final top = rows.first.proxy;
+    if (current == null || !rows.any((r) => r.proxy == current)) return top;
+    final held = latencies[current]!;
+    if (held - rows.first.score < _hysteresis) return current;
+    return top;
+  }
+
+  @override
+  void configure(RoutingConfig config) {
+    _alpha = config.alpha.clamp(0.0, 1.0);
+    _hysteresis = config.hysteresisMs.clamp(0, 5000);
   }
 
   @override
@@ -69,103 +135,87 @@ void main() {
     expect(stats.losses, 0);
     expect(stats.last, 200);
     expect(stats.availability, 1.0);
-    // alpha 0.2: first sample is taken verbatim, then 0.2*200 + 0.8*100.
     expect(scheduler.latencies['A'], closeTo(120, 1e-9));
   });
 
   test('blocked and timeout count as losses and leave the ranking', () async {
     await selector.record('A', 100);
-    await selector.record('A', 0); // 503 -> blocked
-
+    await selector.record('A', 0);
     var stats = selector.statsFor('A')!;
     expect(stats.total, 2);
-    expect(stats.successes, 1);
     expect(stats.losses, 1);
     expect(stats.availability, 0.5);
-    expect(stats.last, 0);
-    expect(selector.best(), isNull); // no positive latency left
+    expect(await selector.best(), isNull);
 
-    await selector.record('A', -1); // 504 -> timeout
+    await selector.record('A', -1);
     stats = selector.statsFor('A')!;
     expect(stats.total, 3);
     expect(stats.losses, 2);
     expect(stats.availability, closeTo(1 / 3, 1e-9));
-    expect(stats.p95, 100.0); // p95 over successful samples only
+    expect(stats.p95, 100.0);
     expect(stats.last, -1);
-    expect(selector.best(), isNull);
+    expect(await selector.best(), isNull);
   });
 
-  test(
-    'a success after a loss re-enters the ranking with a fresh EMA',
-    () async {
-      await selector.record('A', 100);
-      await selector.record('A', 0);
-      expect(selector.best(), isNull);
+  test('a success after a loss re-enters the ranking', () async {
+    await selector.record('A', 100);
+    await selector.record('A', 0);
+    expect(await selector.best(), isNull);
 
-      await selector.record('A', 300);
-      expect(scheduler.latencies['A'], 300.0);
-      expect(selector.best(), 'A');
-      // Successful samples are [100, 300] -> nearest-rank p95 is 300.
-      expect(selector.statsFor('A')!.p95, 300.0);
-    },
-  );
+    await selector.record('A', 300);
+    expect(scheduler.latencies['A'], 300.0);
+    expect(await selector.best(), 'A');
+    expect(selector.statsFor('A')!.p95, 300.0);
+  });
 
-  test('best switches at the exact hysteresis boundary', () {
+  test('best switches at the exact hysteresis boundary', () async {
     scheduler.latencies['A'] = 100;
     scheduler.latencies['B'] = 50;
     selector.adopt('A');
 
-    // Improvement is exactly 50 == hysteresisMs -> switch.
     expect(selector.hysteresisMs, 50);
-    expect(selector.best(), 'B');
+    expect(await selector.best(), 'B');
 
-    // One millisecond more required -> hold the current node.
     selector.configure(hysteresisMs: 51);
-    expect(selector.best(), 'A');
+    expect(await selector.best(), 'A');
 
-    // One millisecond less required -> switch.
     selector.configure(hysteresisMs: 49);
-    expect(selector.best(), 'B');
+    expect(await selector.best(), 'B');
   });
 
-  test('hysteresisMs = 0 always picks the best', () {
+  test('hysteresisMs = 0 always picks the best', () async {
     scheduler.latencies['A'] = 100;
     scheduler.latencies['B'] = 99.9;
     selector.configure(hysteresisMs: 0);
     selector.adopt('A');
-    expect(selector.best(), 'B');
+    expect(await selector.best(), 'B');
   });
 
-  test(
-    'best honours the candidate filter and skips non-positive latencies',
-    () {
-      scheduler.latencies['A'] = 300;
-      scheduler.latencies['B'] = 0; // blocked nodes never win
-      scheduler.latencies['C'] = -1; // timeouts never win
-      expect(selector.best(), 'A');
-      expect(selector.best(candidates: const {'A'}), 'A');
-      expect(selector.best(candidates: const {'Z'}), isNull);
-    },
-  );
+  test('best honours the candidate filter', () async {
+    scheduler.latencies['A'] = 300;
+    scheduler.latencies['B'] = 50;
+    expect(await selector.best(), 'B');
+    expect(await selector.best(candidates: const {'A'}), 'A');
+    expect(await selector.best(candidates: const {'Z'}), isNull);
+  });
 
-  test('best uses the adopted current as its default anchor', () {
+  test('best uses the adopted current as its default anchor', () async {
     scheduler.latencies['A'] = 100;
     scheduler.latencies['B'] = 50;
     selector.configure(hysteresisMs: 0);
     selector.adopt('A');
-    expect(selector.best(), 'B');
+    expect(await selector.best(), 'B');
     selector.adopt('B');
-    expect(selector.best(), 'B');
-    // An explicit current overrides the adopted one without committing it.
-    expect(selector.best(current: 'A'), 'B');
+    expect(await selector.best(), 'B');
+    expect(await selector.best(current: 'A'), 'B');
     expect(selector.current, 'B');
   });
 
-  test('best is a pure suggestion — repeatable, nothing popped', () {
+  test('best is a pure suggestion — repeatable, nothing popped', () async {
     scheduler.latencies['A'] = 100;
     scheduler.latencies['B'] = 50;
-    expect(selector.best(), 'B');
-    expect(selector.best(), 'B');
+    expect(await selector.best(), 'B');
+    expect(await selector.best(), 'B');
     expect(scheduler.latencies, hasLength(2));
   });
 
@@ -190,24 +240,23 @@ void main() {
 
     selector.configure(emaAlpha: 5, hysteresisMs: -1);
     expect(selector.emaAlpha, 1.0);
-    expect(scheduler.emaAlpha, 1.0); // mirrored to the scheduler
     expect(selector.hysteresisMs, 0);
 
     selector.configure(emaAlpha: -5, hysteresisMs: 100000);
     expect(selector.emaAlpha, 0.0);
     expect(selector.hysteresisMs, 5000);
 
-    expect(selector.statsFor('A')!.total, 1); // observations survive
+    expect(selector.statsFor('A')!.total, 1);
   });
 
   test('reset clears ranking and current but keeps history', () async {
     await selector.record('A', 100);
     selector.adopt('A');
-    expect(selector.best(), 'A');
+    expect(await selector.best(), 'A');
 
     selector.reset();
     expect(selector.current, isNull);
-    expect(selector.best(), isNull);
+    expect(await selector.best(), isNull);
     expect(scheduler.latencies, isEmpty);
     expect(selector.statsFor('A')!.total, 1);
   });

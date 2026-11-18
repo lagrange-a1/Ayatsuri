@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import 'app.dart';
+import 'scheduler/frb_generated.dart';
 import 'settings/app_settings.dart';
 
 // Only the process entrypoint lives here: bootstrap, load settings, hand off
@@ -28,5 +29,13 @@ void main() async {
   }
   final settingsController = AppSettingsController();
   await settingsController.load();
+  // Attach the Rust scheduler when a native library is bundled. A missing
+  // dylib (tests, web, older installs) is fine: SchedulerWrapper falls back
+  // to its equivalent Dart implementation.
+  try {
+    await RustLib.init();
+  } catch (_) {
+    // Native backend unavailable; routing keeps working in Dart.
+  }
   runApp(MyApp(settingsController: settingsController));
 }

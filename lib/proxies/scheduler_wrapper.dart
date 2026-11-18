@@ -1,210 +1,496 @@
 // lib/proxies/scheduler_wrapper.dart
-import 'dart:async';
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
+    show Uint64List;
+
 import 'package:ayatsuri/scheduler/lib.dart';
 
-/// Scheduler wrapper for Ayatsuri proxy scheduling.
+/// Mutable routing tunables, mirrored 1:1 into Rust's `SchedulerConfig`.
 ///
-/// This class provides a simple interface to interact with the Rust scheduler
-/// and maintain smoothed latency metrics for each proxy. When the Rust FFI
-/// bridge is unavailable, it falls back to an in-memory Dart scheduler that
-/// preserves EMA smoothing and lowest-latency selection.
+/// Keeping the values here (rather than reading them from Rust) lets the UI
+/// render settings synchronously and gives the Dart fallback identical
+/// behaviour when no native library is available.
+class RoutingConfig {
+  const RoutingConfig({
+    this.alpha = 0.2,
+    this.jitterWeight = 0.5,
+    this.failurePenaltyMs = 120,
+    this.stalePenaltyMs = 40,
+    this.hysteresisMs = 50,
+    this.cooldownMs = 10_000,
+    this.maxFailures = 3,
+    this.staleAfterMs = 180_000,
+    this.exploreMinSamples = 3,
+    this.exploreBonusMs = 8,
+  });
+
+  static const RoutingConfig defaults = RoutingConfig();
+
+  /// NaN-safe, bounded values. The Rust core clamps the same way, so both
+  /// backends must read the normalized values to stay behaviour-identical.
+  double get safeAlpha => alpha.isNaN ? 0.2 : alpha.clamp(0.0, 1.0);
+  double get safeHysteresis =>
+      hysteresisMs.isNaN ? 50.0 : hysteresisMs.clamp(0, 5_000);
+
+  /// Fully clamped copy; bounds mirror `SchedulerConfig` in Rust.
+  static double _finite(double v, double lo, double hi) =>
+      v.isFinite ? v.clamp(lo, hi) : lo;
+
+  RoutingConfig get normalized => RoutingConfig(
+    alpha: safeAlpha,
+    jitterWeight: _finite(jitterWeight, 0.0, 4.0),
+    failurePenaltyMs: _finite(failurePenaltyMs, 0, 10_000),
+    stalePenaltyMs: _finite(stalePenaltyMs, 0, 10_000),
+    hysteresisMs: safeHysteresis,
+    cooldownMs: cooldownMs.clamp(0, 3_600_000),
+    maxFailures: maxFailures < 1 ? 1 : maxFailures,
+    staleAfterMs: staleAfterMs < 1_000 ? 1_000 : staleAfterMs,
+    exploreMinSamples: exploreMinSamples < 1 ? 1 : exploreMinSamples,
+    exploreBonusMs: _finite(exploreBonusMs, 0, 500),
+  );
+
+  final double alpha;
+  final double jitterWeight;
+  final double failurePenaltyMs;
+  final double stalePenaltyMs;
+  final double hysteresisMs;
+  final int cooldownMs;
+  final int maxFailures;
+  final int staleAfterMs;
+  final int exploreMinSamples;
+  final double exploreBonusMs;
+
+  SchedulerConfig get rustConfig => SchedulerConfig(
+    alpha: safeAlpha,
+    jitterWeight: _finite(jitterWeight, 0.0, 4.0),
+    failurePenaltyMs: _finite(failurePenaltyMs, 0, 10_000),
+    stalePenaltyMs: _finite(stalePenaltyMs, 0, 10_000),
+    hysteresisMs: safeHysteresis,
+    cooldownMs: BigInt.from(cooldownMs.clamp(0, 3_600_000)),
+    maxFailures: maxFailures < 1 ? 1 : maxFailures,
+    staleAfterMs: BigInt.from(staleAfterMs < 1_000 ? 1_000 : staleAfterMs),
+    exploreMinSamples: exploreMinSamples < 1 ? 1 : exploreMinSamples,
+    exploreBonusMs: _finite(exploreBonusMs, 0, 500),
+  );
+
+  RoutingConfig copyWith({
+    double? alpha,
+    double? jitterWeight,
+    double? failurePenaltyMs,
+    double? stalePenaltyMs,
+    double? hysteresisMs,
+    int? cooldownMs,
+    int? maxFailures,
+    int? staleAfterMs,
+    int? exploreMinSamples,
+    double? exploreBonusMs,
+  }) => RoutingConfig(
+    alpha: alpha ?? this.alpha,
+    jitterWeight: jitterWeight ?? this.jitterWeight,
+    failurePenaltyMs: failurePenaltyMs ?? this.failurePenaltyMs,
+    stalePenaltyMs: stalePenaltyMs ?? this.stalePenaltyMs,
+    hysteresisMs: hysteresisMs ?? this.hysteresisMs,
+    cooldownMs: cooldownMs ?? this.cooldownMs,
+    maxFailures: maxFailures ?? this.maxFailures,
+    staleAfterMs: staleAfterMs ?? this.staleAfterMs,
+    exploreMinSamples: exploreMinSamples ?? this.exploreMinSamples,
+    exploreBonusMs: exploreBonusMs ?? this.exploreBonusMs,
+  );
+}
+
+/// Non-destructive ranking result for a single proxy.
+class NodeRank {
+  const NodeRank({
+    required this.proxy,
+    required this.ewma,
+    required this.jitter,
+    required this.score,
+    required this.samples,
+    required this.failures,
+    required this.ageMs,
+    required this.available,
+  });
+
+  final String proxy;
+  final double ewma;
+  final double jitter;
+  final double score;
+  final int samples;
+  final int failures;
+  final int ageMs;
+  final bool available;
+
+  /// True while a node has too few samples for a confident ranking.
+  bool get lowConfidence => samples < 3;
+
+  @override
+  String toString() =>
+      'NodeRank($proxy: ewma=${ewma.toStringAsFixed(1)}, '
+      'jitter=${jitter.toStringAsFixed(1)}, score=${score.toStringAsFixed(1)}, '
+      'samples=$samples, failures=$failures)';
+}
+
+class _DartNode {
+  _DartNode(this.ewma)
+    : jitter = 0,
+      samples = 0,
+      failures = 0,
+      lastSeenMs = 0,
+      available = true;
+
+  double ewma;
+  double jitter;
+  int samples;
+  int failures;
+  int lastSeenMs;
+  bool available;
+}
+
+/// Bridge between the app's proxy names and the native Rust scheduler.
 ///
-/// The EMA smoothing factor is instance-configurable via [emaAlpha]; the
-/// hysteresis used by [bestProxy] is supplied per call. All ranking helpers
-/// ([ranked], [smoothedFor], [snapshot], [bestProxy]) read the Dart-side
-/// mirror and never touch the destructive Rust `nextTask()` operation.
+/// The native core is used whenever it can be constructed; otherwise an
+/// in-Dart implementation of the same scoring rules keeps the app functional
+/// (tests, web, devices without a packaged dylib).
 class SchedulerWrapper {
-  // Ensure the Rust library is initialized exactly once.
-  static Future<void>? _initialization;
-  static Scheduler? _scheduler;
+  SchedulerWrapper({RoutingConfig? config})
+    : _config = (config ?? RoutingConfig.defaults).normalized;
 
-  // Whether the Rust FFI bridge is usable. Flipped to false if initialization
-  // fails (e.g. no linked dylib / RustLib.init was never called).
-  static bool _rustAvailable = true;
+  static LatencyScheduler? _rust;
+  static bool _rustTried = false;
 
-  /// Default EMA smoothing factor (promoted from the old private constant).
+  /// Shared in-flight init. The first caller creates it synchronously; every
+  /// concurrent caller awaits the same future, so no probe result is recorded
+  /// only to the Dart mirror while Rust is still loading.
+  static Future<void>? _rustInitFuture;
+
+  RoutingConfig _config;
+
+  /// True when the native Rust core is the active ranking backend.
+  bool get rustActive => _rust != null;
+
+  /// True when a native library was looked up (successfully or not).
+  static bool get rustAttempted => _rustTried;
+
   static const double defaultEmaAlpha = 0.2;
-
-  /// Default hysteresis (ms) for [bestProxy], matching `AppSettings`.
   static const int defaultHysteresisMs = 50;
 
-  /// Clamp an EMA factor to the valid `[0, 1]` range.
-  static double _clampAlpha(double value) {
-    if (value < 0) return 0.0;
-    if (value > 1) return 1.0;
-    return value;
-  }
-
-  SchedulerWrapper({double emaAlpha = SchedulerWrapper.defaultEmaAlpha})
-    : _emaAlpha = _clampAlpha(emaAlpha);
-
-  double _emaAlpha;
-
-  /// Read/write EMA factor. The setter clamps to `[0, 1]`, and
-  /// [updateLatency] reads this value on every call (both backends), so
-  /// changing it takes effect for subsequent samples without any reset.
-  double get emaAlpha => _emaAlpha;
-  set emaAlpha(double value) => _emaAlpha = _clampAlpha(value);
-
-  final Map<String, double> _smoothedLatencies = {};
-  final Map<String, BigInt> _proxyIds = {};
+  final Map<String, int> _ids = <String, int>{};
+  final Map<int, String> _names = <int, String>{};
+  final Map<int, _DartNode> _mirror = <int, _DartNode>{};
   int _nextId = 0;
+  int? _lastSwitchMs;
+  int? _lastSwitchTo;
 
-  // Dart fallback: proxy id -> smoothed latency, used when Rust is missing.
-  final Map<BigInt, BigInt> _fallbackLatencies = {};
+  double get emaAlpha => _config.alpha;
+  set emaAlpha(double value) => configure(_config.copyWith(alpha: value));
 
-  /// Initialize the Rust scheduler (once).
-  ///
-  /// Any failure is swallowed and downgrades to the Dart fallback; the shared
-  /// [_initialization] future always completes normally so callers never see a
-  /// broken future and updateLatency/getBestProxy never throw.
-  Future<void> _ensureRustInit() async {
-    if (_scheduler != null) return;
-    if (_initialization != null) {
-      await _initialization;
+  RoutingConfig get config => _config;
+
+  Future<void> _ensureRust() async {
+    final pending = _rustInitFuture;
+    if (pending != null) {
+      // Another caller is already loading the library; wait for it so this
+      // observation reaches the same backend rather than racing ahead.
+      await pending;
       return;
     }
-    _initialization = Future.sync(() async {
-      try {
-        await schedulerLibInit();
-        _scheduler = await Scheduler.newInstance();
-        _rustAvailable = true;
-      } catch (_) {
-        _scheduler = null;
-        _rustAvailable = false;
-      }
-    });
-    await _initialization;
+    if (_rustTried) return;
+    _rustTried = true;
+    _rustInitFuture = _loadRust();
+    await _rustInitFuture;
   }
 
-  /// Update the latency for a proxy, maintaining EMA and adding task to
-  /// scheduler. The configured [emaAlpha] is used by both the Rust and the
-  /// Dart-fallback paths (the smoothing happens once, before the branch).
-  Future<void> updateLatency(String proxy, int latency) async {
-    await _ensureRustInit();
-    final alpha = emaAlpha;
-    double smoothed;
-    if (_smoothedLatencies.containsKey(proxy)) {
-      final old = _smoothedLatencies[proxy]!;
-      smoothed = alpha * latency + (1 - alpha) * old;
+  Future<void> _loadRust() async {
+    try {
+      _rust = await LatencyScheduler.newInstance(config: _config.rustConfig);
+    } catch (_) {
+      // No linked dylib / RustLib.init() never ran / web build without wasm.
+      _rust = null;
+    }
+  }
+
+  int _idFor(String proxy) {
+    final existing = _ids[proxy];
+    if (existing != null) return existing;
+    final id = _nextId++;
+    _ids[proxy] = id;
+    _names[id] = proxy;
+    return id;
+  }
+
+  String? _nameFor(int id) => _names[id];
+
+  /// Record a probe result: any positive delay is a sample, `0` means blocked
+  /// and negative (the `-1` timeout sentinel) counts as a timeout failure.
+  Future<void> record(String proxy, int delay) async {
+    if (delay > 0) {
+      await observe(proxy, delay);
     } else {
-      smoothed = latency.toDouble();
+      await fail(proxy, timeout: delay < 0);
     }
-    _smoothedLatencies[proxy] = smoothed;
+  }
 
-    if (!_proxyIds.containsKey(proxy)) {
-      _proxyIds[proxy] = BigInt.from(_nextId++);
-    }
-    final id = _proxyIds[proxy]!;
-    final taskLatency = BigInt.from(smoothed.round());
-
-    if (_rustAvailable && _scheduler != null) {
-      await _scheduler!.addTask(
-        task: Task(id: id, latency: taskLatency),
+  Future<void> observe(String proxy, int latencyMs) async {
+    await _ensureRust();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final id = _idFor(proxy);
+    _mirrorObserve(id, latencyMs, now);
+    final rust = _rust;
+    if (rust != null) {
+      await rust.observe(
+        id: BigInt.from(id),
+        latencyMs: BigInt.from(latencyMs),
+        nowMs: BigInt.from(now),
       );
-    } else {
-      _fallbackLatencies[id] = taskLatency;
     }
   }
 
-  /// Get the best proxy according to the scheduler.
-  ///
-  /// Removes and returns the name of the lowest-latency task from whichever
-  /// backend is active; ties are broken by the smallest proxy id (insertion
-  /// order). Kept for backwards compatibility — this is a destructive pop.
-  Future<String?> getBestProxy() async {
-    await _ensureRustInit();
-
-    BigInt? bestId;
-    if (_rustAvailable && _scheduler != null) {
-      final task = await _scheduler!.nextTask();
-      bestId = task?.id;
-    } else if (_fallbackLatencies.isNotEmpty) {
-      final best = _fallbackLatencies.entries.reduce((a, b) {
-        final byLatency = a.value.compareTo(b.value);
-        if (byLatency != 0) return byLatency < 0 ? a : b;
-        return a.key.compareTo(b.key) < 0 ? a : b;
-      });
-      bestId = best.key;
-      _fallbackLatencies.remove(best.key);
+  Future<void> fail(String proxy, {bool timeout = false}) async {
+    await _ensureRust();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final id = _idFor(proxy);
+    _mirrorFail(id, timeout: timeout, now: now);
+    final rust = _rust;
+    if (rust != null) {
+      await rust.fail(
+        id: BigInt.from(id),
+        timeout: timeout,
+        nowMs: BigInt.from(now),
+      );
     }
-
-    if (bestId == null) return null;
-    for (final entry in _proxyIds.entries) {
-      if (entry.value == bestId) return entry.key;
-    }
-    return null;
   }
 
-  /// Non-destructive: all registered proxies sorted by smoothed latency
-  /// ascending; ties broken by name for a stable, repeatable order.
-  ///
-  /// Reads only the Dart-side mirror, so it works even when Rust is
-  /// unavailable and never calls the destructive `nextTask()`.
+  int? proxyId(String proxy) => _ids[proxy];
+
+  Iterable<String> get knownProxies => _ids.keys;
+
+  /// All available candidates sorted by score ascending, non-destructive.
+  Future<List<NodeRank>> rank(Iterable<String> candidates) async {
+    await _ensureRust();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final ids = candidates.map(proxyId).whereType<int>().toList();
+    final rust = _rust;
+    if (rust != null) {
+      final rows = await rust.rank(
+        candidates: Uint64List.fromList(ids),
+        nowMs: BigInt.from(now),
+      );
+      // Rust owns the arithmetic, so surface Rust's numbers directly rather
+      // than recomputing them in the Dart mirror.
+      return rows
+          .map((r) {
+            final name = _nameFor(r.id.toInt());
+            if (name == null) return null;
+            return NodeRank(
+              proxy: name,
+              ewma: r.ewma,
+              jitter: r.jitter,
+              score: r.score,
+              samples: r.samples,
+              failures: r.failures,
+              ageMs: r.ageMs.toInt(),
+              available: r.available,
+            );
+          })
+          .whereType<NodeRank>()
+          .toList();
+    }
+    return _rankLocal(ids, now);
+  }
+
+  /// Choose the best candidate. `current` is kept unless the improvement is
+  /// larger than hysteresis and the switch cooldown has elapsed.
+  Future<String?> best(Iterable<String> candidates, {String? current}) async {
+    await _ensureRust();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final ids = candidates.map(proxyId).whereType<int>().toList();
+    final currentId = current == null ? null : _ids[current];
+    final rust = _rust;
+    if (rust != null) {
+      final picked = await rust.best(
+        candidates: Uint64List.fromList(ids),
+        current: currentId == null ? null : BigInt.from(currentId),
+        nowMs: BigInt.from(now),
+      );
+      return picked == null ? null : _nameFor(picked.id.toInt());
+    }
+    final local = _bestLocal(ids, currentId, now);
+    return local == null ? null : _nameFor(local);
+  }
+
+  /// Synchronous read of a node's mirrored stats (works without awaiting FFI).
+  NodeRank? statsFor(String proxy) {
+    if (!_ids.containsKey(proxy)) return null;
+    return mirrorRank(proxy, DateTime.now().millisecondsSinceEpoch);
+  }
+
+  /// Legacy non-destructive snapshot: proxies sorted by smoothed latency.
   List<MapEntry<String, double>> ranked() {
-    final entries = _smoothedLatencies.entries.toList();
-    entries.sort((a, b) {
-      final byLatency = a.value.compareTo(b.value);
-      if (byLatency != 0) return byLatency;
-      return a.key.compareTo(b.key);
-    });
-    return entries;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final rows =
+        _ids.entries
+            .where((e) => _mirror[e.value]?.available == true)
+            .map((e) => MapEntry(e.key, _score(_mirror[e.value], now)))
+            .where((e) => e.value.isFinite)
+            .toList()
+          ..sort((a, b) {
+            final cmp = a.value.compareTo(b.value);
+            return cmp != 0 ? cmp : a.key.compareTo(b.key);
+          });
+    return rows;
   }
 
-  /// Non-destructive lookup of a proxy's smoothed latency; `null` if unknown.
-  double? smoothedFor(String proxy) => _smoothedLatencies[proxy];
-
-  /// Remove a proxy from every mirror and, when the Rust backend is active,
-  /// from the scheduler task list as well. Unknown names are a no-op.
-  Future<void> remove(String proxy) async {
-    final id = _proxyIds.remove(proxy);
-    _smoothedLatencies.remove(proxy);
-    if (id == null) return;
-    _fallbackLatencies.remove(id);
-    if (_rustAvailable && _scheduler != null) {
-      await _scheduler!.removeTask(id: id);
-    }
-  }
-
-  /// Thin convenience alias for [ranked] (compatibility with callers that
-  /// expect a `snapshot()` name). Returns a fresh list each call.
   List<MapEntry<String, double>> snapshot() => ranked();
 
-  /// Thin convenience alias for [remove].
-  Future<void> removeProxy(String proxy) => remove(proxy);
-
-  /// Non-destructive chooser with hysteresis.
-  ///
-  /// Picks the lowest-smoothed-latency proxy, but keeps [current] unless the
-  /// best candidate is better by at least [hysteresisMs] (clamped to
-  /// `[0, 5000]`, matching settings normalization). `hysteresisMs == 0`
-  /// therefore means "always take the best". Blocked/timeout samples
-  /// (non-positive smoothed values) never win. Uses [ranked] and
-  /// [smoothedFor] only, so repeated calls are stable and nothing is popped.
-  String? bestProxy({String? current, int? hysteresisMs}) {
-    final hyst = (hysteresisMs ?? defaultHysteresisMs).clamp(0, 5000);
-    final usable = ranked().where((e) => e.value > 0).toList();
-    if (usable.isEmpty) return null;
-    final top = usable.first;
-
-    if (current == null) return top.key;
-    final anchorLatency = smoothedFor(current);
-    if (anchorLatency == null || anchorLatency <= 0) return top.key;
-    if (top.key == current) return current;
-    if (anchorLatency - top.value < hyst) return current;
-    return top.key;
+  double? smoothedFor(String proxy) {
+    final id = _ids[proxy];
+    final node = id == null ? null : _mirror[id];
+    return node?.ewma;
   }
 
-  /// Clear all state — both this instance's mirrors and the shared static
-  /// scheduler/init flags, so a subsequent call re-initializes from scratch.
-  /// This also removes the cross-instance pollution caused by the statics.
+  /// Compatibility alias: choosing without a destructive pop.
+  Future<String?> getBestProxy() => best(_ids.keys);
+
+  Future<void> remove(String proxy) async {
+    final id = _ids.remove(proxy);
+    if (id == null) return;
+    _names.remove(id);
+    _mirror.remove(id);
+    if (_lastSwitchTo == id) {
+      _lastSwitchTo = null;
+      _lastSwitchMs = null;
+    }
+    final rust = _rust;
+    if (rust != null) await rust.remove(id: BigInt.from(id));
+  }
+
+  Future<void> removeProxy(String proxy) => remove(proxy);
+
+  void configure(RoutingConfig config) {
+    _config = config.normalized;
+    final rust = _rust;
+    if (rust != null) {
+      // Fire-and-forget: the only effect is replacing a config object.
+      rust.configure(config: config.rustConfig);
+    }
+  }
+
+  Future<void> updateLatency(String proxy, int latency) =>
+      observe(proxy, latency);
+
   void reset() {
-    _scheduler = null;
-    _initialization = null;
-    _rustAvailable = true;
-    _fallbackLatencies.clear();
-    _proxyIds.clear();
-    _smoothedLatencies.clear();
+    _ids.clear();
+    _names.clear();
+    _mirror.clear();
     _nextId = 0;
+    _lastSwitchMs = null;
+    _lastSwitchTo = null;
+    _rust?.clear();
+  }
+
+  static void resetForTests() {
+    _rust?.clear();
+    _rust = null;
+    _rustTried = false;
+    _rustInitFuture = null;
+  }
+
+  // ------------------------------------------------------------------------
+  // Dart fallback: same formulas as rust/scheduler/src/lib.rs
+  // ------------------------------------------------------------------------
+
+  void _mirrorObserve(int id, int latencyMs, int now) {
+    final node = _mirror.putIfAbsent(id, () => _DartNode(latencyMs.toDouble()));
+    if (node.samples == 0) {
+      node.ewma = latencyMs.toDouble();
+      node.jitter = 0;
+    } else {
+      final deviation = (latencyMs - node.ewma).abs();
+      final a = _config.alpha;
+      node.ewma = a * latencyMs + (1 - a) * node.ewma;
+      node.jitter = a * deviation + (1 - a) * node.jitter;
+    }
+    node.samples++;
+    if (node.failures > 0) node.failures--;
+    node.available = true;
+    node.lastSeenMs = now;
+  }
+
+  void _mirrorFail(int id, {required bool timeout, required int now}) {
+    final node = _mirror.putIfAbsent(id, () => _DartNode(double.maxFinite));
+    // Match Rust's fail(): a node created by a failed probe still gets a
+    // timestamp so its reported age is 0, not "since epoch".
+    if (node.samples == 0 && node.failures == 0) node.lastSeenMs = now;
+    node.failures += timeout ? 2 : 1;
+    if (node.failures >= _config.maxFailures) node.available = false;
+  }
+
+  double _score(_DartNode? node, int now) {
+    if (node == null || node.samples == 0) return double.maxFinite;
+    final age = now - node.lastSeenMs;
+    final staleUnits = age > _config.staleAfterMs
+        ? ((age - _config.staleAfterMs) / _config.staleAfterMs).floor() + 1
+        : 0;
+    final explore = node.samples < _config.exploreMinSamples
+        ? (_config.exploreMinSamples - node.samples) * _config.exploreBonusMs
+        : 0.0;
+    final raw =
+        node.ewma +
+        _config.jitterWeight * node.jitter +
+        node.failures * _config.failurePenaltyMs +
+        staleUnits * _config.stalePenaltyMs -
+        explore;
+    return raw < 0 ? 0.0 : raw;
+  }
+
+  NodeRank mirrorRank(String proxy, int now) {
+    final node = _mirror[_ids[proxy]];
+    return NodeRank(
+      proxy: proxy,
+      ewma: node?.ewma ?? 0,
+      jitter: node?.jitter ?? 0,
+      score: _score(node, now),
+      samples: node?.samples ?? 0,
+      failures: node?.failures ?? 0,
+      ageMs: node == null ? 0 : now - node.lastSeenMs,
+      available: node?.available ?? false,
+    );
+  }
+
+  List<NodeRank> _rankLocal(List<int> ids, int now) {
+    final rows =
+        ids
+            .where((id) => _mirror[id]?.available == true)
+            .map((id) => mirrorRank(_names[id]!, now))
+            .toList()
+          ..sort((a, b) {
+            final cmp = a.score.compareTo(b.score);
+            return cmp != 0 ? cmp : a.proxy.compareTo(b.proxy);
+          });
+    return rows;
+  }
+
+  int? _bestLocal(List<int> ids, int? current, int now) {
+    final ranked = _rankLocal(ids, now);
+    if (ranked.isEmpty) return null;
+    final top = ranked.first;
+    if (current != null) {
+      NodeRank? held;
+      for (final row in ranked) {
+        if (_ids[row.proxy] == current) {
+          held = row;
+          break;
+        }
+      }
+      if (held != null) {
+        final cooling =
+            _lastSwitchMs != null && now - _lastSwitchMs! < _config.cooldownMs;
+        if (cooling || held.score - top.score <= _config.hysteresisMs) {
+          return current;
+        }
+      }
+    }
+    _lastSwitchMs = now;
+    _lastSwitchTo = _ids[top.proxy];
+    return _ids[top.proxy];
   }
 }

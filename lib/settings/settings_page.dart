@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:ayatsuri/l10n/app_localizations.dart';
 
 import '../data/endpoints.dart';
+import '../proxies/scheduler_wrapper.dart';
 import 'advanced_console.dart';
 import 'app_settings.dart';
 
@@ -396,11 +397,33 @@ class SettingsPage extends StatelessWidget {
                   '${s.customLng.round()}°',
                 ),
               ],
-              // EMA/hysteresis used to be exposed here as two sliders. They
-              // are routing internals with no meaning to a node picker, and
-              // the defaults (0.2 / 50ms) are already good. The fields stay
-              // in AppSettings so existing stored configs and tests keep
-              // round-tripping; only the knobs are gone.
+              // EMA/hysteresis remain persisted but hidden: they are routing
+              // internals, not knobs for a person picking a country. What is
+              // useful here is the active backend and the opt-in auto mode.
+              _header(context, _smartLabel(context, '智能调度', 'Smart routing')),
+              ListTile(
+                title: Text(_smartLabel(context, '调度内核', 'Routing core')),
+                subtitle: Text(
+                  SchedulerWrapper().rustActive
+                      ? 'Rust (native)'
+                      : 'Dart (fallback)',
+                ),
+              ),
+              SwitchListTile(
+                title: Text(
+                  _smartLabel(context, '自动采用推荐节点', 'Auto-apply recommendation'),
+                ),
+                subtitle: Text(
+                  _smartLabel(
+                    context,
+                    '测速后自动采用优选节点；手动点选始终优先',
+                    'Apply the best node after probing; manual taps always win',
+                  ),
+                ),
+                value: s.autoApplyRecommendation,
+                onChanged: (v) => set(s.copyWith(autoApplyRecommendation: v)),
+              ),
+              const Divider(height: 8),
               SegmentedButton<ProbeSort>(
                 segments: [
                   ButtonSegment(

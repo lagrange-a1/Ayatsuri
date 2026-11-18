@@ -675,6 +675,7 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
           probeSort: _s.probeSort,
           compact: _s.compactNodeList,
           sheetAnimation: _s.sheetAnimation,
+          autoApply: _s.autoApplyRecommendation,
           onSelected: (proxyName, groupName) {
             if (mounted) {
               final l10n = AppLocalizations.of(context);
@@ -1012,6 +1013,7 @@ class _CountrySheet extends StatefulWidget {
     this.probeSort = ProbeSort.delay,
     this.compact = false,
     this.sheetAnimation = SheetAnimation.slide,
+    this.autoApply = false,
   });
 
   final ProxySelection selection;
@@ -1020,6 +1022,7 @@ class _CountrySheet extends StatefulWidget {
   final ProbeSort probeSort;
   final bool compact;
   final SheetAnimation sheetAnimation;
+  final bool autoApply;
 
   @override
   State<_CountrySheet> createState() => _CountrySheetState();
@@ -1030,6 +1033,9 @@ class _CountrySheetState extends State<_CountrySheet> {
   int _generation = 0;
   String? _selecting;
   String? _selectedGroupName;
+  String? _recommended;
+  bool _manualOverride = false;
+  bool _autoApplied = false;
 
   @override
   void initState() {
@@ -1051,7 +1057,12 @@ class _CountrySheetState extends State<_CountrySheet> {
   void _probeAll() {
     final gen = ++_generation;
     // Same node often appears in several groups; probe each name once.
-    final names = _candidates.map((c) => c.proxy.name).toSet();
+    final names = _candidates.map((c) => c.proxy.name).toSet().toList();
+    var pending = names.length;
+    if (pending == 0) {
+      _refreshRecommendation();
+      return;
+    }
     for (final name in names) {
       // `ProxySelection.probeByName` records real results into the shared
       // history itself; only the UI refresh remains here.
@@ -1064,11 +1075,43 @@ class _CountrySheetState extends State<_CountrySheet> {
             _selectedGroupName = _defaultGroupName(_candidates);
           }
         });
+        if (--pending == 0) _refreshRecommendation();
       });
     }
   }
 
-  Future<void> _onTap(ProxyCandidate candidate) async {
+  /// Ask the Rust/Dart scheduler for a non-destructive suggestion once this
+  /// sheet's probe round has finished. Auto-apply is opt-in, fires at most
+  /// once per sheet, and never overrides an explicit manual tap.
+  Future<void> _refreshRecommendation() async {
+    if (_manualOverride) return;
+    final gen = _generation;
+    final names = _candidates.map((c) => c.proxy.name).toSet().toList();
+    if (names.isEmpty) return;
+    final currentNow = _candidates.where((c) => c.isNow);
+    final current = currentNow.isEmpty ? null : currentNow.first.proxy.name;
+    final best = await widget.selection.bestProxy(
+      candidates: names,
+      current: current,
+    );
+    if (!mounted || gen != _generation || _manualOverride) return;
+    setState(() => _recommended = best);
+    if (!widget.autoApply || _autoApplied || best == null || best == current) {
+      return;
+    }
+    final target = _candidates.where(
+      (c) => c.proxy.name == best && c.group.name == _selectedGroupName,
+    );
+    if (target.isEmpty) return;
+    _autoApplied = true;
+    await _onTap(target.first, closeSheet: false);
+  }
+
+  Future<void> _onTap(
+    ProxyCandidate candidate, {
+    bool closeSheet = true,
+  }) async {
+    _manualOverride = true;
     if (_selecting != null) return;
     setState(() => _selecting = candidate.proxy.name);
     try {
@@ -1102,7 +1145,9 @@ class _CountrySheetState extends State<_CountrySheet> {
       }
     });
     widget.onSelected(candidate.proxy.name, candidate.group.name);
-    Navigator.of(context).pop();
+    if (closeSheet && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
   }
 
   List<ProxyCandidate> _filterAndSort(List<ProxyCandidate> source) {
@@ -1168,9 +1213,15 @@ class _CountrySheetState extends State<_CountrySheet> {
     final statsText = 'p95 $p95Part · $availabilityText%';
     // Merge every visible line into one screen-reader label so a card is
     // not announced as "delay only": name, delay, then window stats.
+    final isRecommended =
+        _recommended == candidate.proxy.name && !candidate.isNow;
     final accessibleLabel = <String>[
       cleanNodeLabel(candidate.proxy.name),
       delayLabel(l10n, delay),
+      if (isRecommended)
+        (Localizations.localeOf(context).languageCode == 'zh'
+            ? '推荐'
+            : 'Recommended'),
       if (showStats) 'p95 $p95Part',
       if (showStats) '$availabilityText%',
     ].join(', ');
@@ -1225,6 +1276,18 @@ class _CountrySheetState extends State<_CountrySheet> {
                         width: 16,
                         height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    else if (isRecommended)
+                      Tooltip(
+                        message:
+                            Localizations.localeOf(context).languageCode == 'zh'
+                            ? '调度推荐'
+                            : 'Recommended by scheduler',
+                        child: Icon(
+                          Icons.auto_awesome,
+                          size: 16,
+                          color: scheme.primary,
+                        ),
                       )
                     else if (candidate.isNow)
                       Icon(
@@ -1379,6 +1442,30 @@ class _CountrySheetState extends State<_CountrySheet> {
                 ),
                 const SizedBox(height: 8),
               ],
+              if (_recommended != null &&
+                  visible.any((c) => c.proxy.name == _recommended))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Semantics(
+                    label: Localizations.localeOf(context).languageCode == 'zh'
+                        ? '调度推荐 ${cleanNodeLabel(_recommended!)}，点击采用'
+                        : 'Recommended ${cleanNodeLabel(_recommended!)}; tap to apply',
+                    child: ActionChip(
+                      key: const ValueKey('node-recommendation'),
+                      avatar: const Icon(Icons.auto_awesome, size: 16),
+                      label: Text(
+                        '${Localizations.localeOf(context).languageCode == 'zh' ? '推荐' : 'Recommended'} '
+                        '${cleanNodeLabel(_recommended!)}',
+                      ),
+                      onPressed: () {
+                        final target = visible.where(
+                          (c) => c.proxy.name == _recommended,
+                        );
+                        if (target.isNotEmpty) _onTap(target.first);
+                      },
+                    ),
+                  ),
+                ),
               if (visible.isEmpty)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 24),

@@ -2,7 +2,7 @@
 
 [![Build Release](https://github.com/lagrange-a1/ayatsuri/actions/workflows/build-release.yml/badge.svg)](https://github.com/lagrange-a1/ayatsuri/actions/workflows/build-release.yml)
 [![pre-commit](https://github.com/lagrange-a1/ayatsuri/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/lagrange-a1/ayatsuri/actions/workflows/pre-commit.yml)
-![version](https://img.shields.io/badge/version-0.2.0-blue)
+![version](https://img.shields.io/badge/version-0.2.1-blue)
 ![Dart](https://img.shields.io/badge/Dart-3.10.7%2B-blue)
 ![Flutter](https://img.shields.io/badge/Flutter-3.38.7-blueviolet)
 
@@ -11,7 +11,7 @@
 ## 功能
 
 - **选节点**：点选国家，从候选中选择并写入控制器。
-- **延迟探测**：定时测速、保留历史统计，给出选路建议但不自动切换节点。
+- **延迟探测与智能选路**：定时测速、保留历史统计；Rust 调度核心按 EWMA、抖动、失败惩罚、停滞惩罚、探索奖励、迟滞与冷却给出建议，默认不自动切换（可在设置中开启自动采用）。
 - **信息面板**：汇总九个控制器端点；诊断项折叠，原始 JSON 分页显示。
 - **调试控制台**：预设命令与自定义请求共用认证客户端，curl 预览不填充 secret。
 - **设置**：主题、背景、文字缩放、语言（中/英）等保存在本地，配置损坏时回退默认值。
@@ -22,7 +22,7 @@ Android、iOS、Linux、macOS、Windows、Web 均有构建配置；目前只有 
 
 - Flutter 3.38.7 stable、Dart SDK `^3.10.7`
 - Android 构建需要 Java 17 与 Android SDK（含 `apksigner`）
-- Rust 工具链（可选，运行 `cargo test` 时需要）
+- Rust 工具链（Android 发布构建需要，用于编译 `libscheduler.so`；仅改 Dart 时可选）
 - 启用了 external-controller 的 Mihomo 内核（默认 `http://localhost:9091`）
 
 ## 本地运行
@@ -57,6 +57,8 @@ dart run build_runner build --delete-conflicting-outputs
 ## 构建
 
 ```bash
+# 修改 rust/scheduler 后先重建三个 ABI 的原生库（需要 cargo-ndk 与 Android NDK）
+./scripts/build-rust-android.sh
 flutter build apk --release --split-per-abi
 ```
 

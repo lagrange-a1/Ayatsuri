@@ -19,18 +19,30 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   });
 
   CrossPlatformFinalizerArg
-  get rust_arc_decrement_strong_count_SchedulerPtr => wire
-      ._rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSchedulerPtr;
+  get rust_arc_decrement_strong_count_LatencySchedulerPtr => wire
+      ._rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencySchedulerPtr;
 
   @protected
-  Scheduler
-  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
+  LatencyScheduler
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
     dynamic raw,
   );
 
   @protected
-  Scheduler
-  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
+  LatencyScheduler
+  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    dynamic raw,
+  );
+
+  @protected
+  LatencyScheduler
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    dynamic raw,
+  );
+
+  @protected
+  LatencyScheduler
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
     dynamic raw,
   );
 
@@ -38,19 +50,37 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
-  Task dco_decode_box_autoadd_task(dynamic raw);
+  NodeStats dco_decode_box_autoadd_node_stats(dynamic raw);
 
   @protected
-  List<Task> dco_decode_list_task(dynamic raw);
+  SchedulerConfig dco_decode_box_autoadd_scheduler_config(dynamic raw);
 
   @protected
-  Task? dco_decode_opt_box_autoadd_task(dynamic raw);
+  BigInt dco_decode_box_autoadd_u_64(dynamic raw);
 
   @protected
-  Scheduler dco_decode_scheduler(dynamic raw);
+  double dco_decode_f_64(dynamic raw);
 
   @protected
-  Task dco_decode_task(dynamic raw);
+  List<NodeStats> dco_decode_list_node_stats(dynamic raw);
+
+  @protected
+  Uint64List dco_decode_list_prim_u_64_strict(dynamic raw);
+
+  @protected
+  NodeStats dco_decode_node_stats(dynamic raw);
+
+  @protected
+  NodeStats? dco_decode_opt_box_autoadd_node_stats(dynamic raw);
+
+  @protected
+  BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw);
+
+  @protected
+  SchedulerConfig dco_decode_scheduler_config(dynamic raw);
+
+  @protected
+  int dco_decode_u_32(dynamic raw);
 
   @protected
   BigInt dco_decode_u_64(dynamic raw);
@@ -62,14 +92,26 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BigInt dco_decode_usize(dynamic raw);
 
   @protected
-  Scheduler
-  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
+  LatencyScheduler
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
     SseDeserializer deserializer,
   );
 
   @protected
-  Scheduler
-  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
+  LatencyScheduler
+  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  LatencyScheduler
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  LatencyScheduler
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
     SseDeserializer deserializer,
   );
 
@@ -77,19 +119,41 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
-  Task sse_decode_box_autoadd_task(SseDeserializer deserializer);
+  NodeStats sse_decode_box_autoadd_node_stats(SseDeserializer deserializer);
 
   @protected
-  List<Task> sse_decode_list_task(SseDeserializer deserializer);
+  SchedulerConfig sse_decode_box_autoadd_scheduler_config(
+    SseDeserializer deserializer,
+  );
 
   @protected
-  Task? sse_decode_opt_box_autoadd_task(SseDeserializer deserializer);
+  BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer);
 
   @protected
-  Scheduler sse_decode_scheduler(SseDeserializer deserializer);
+  double sse_decode_f_64(SseDeserializer deserializer);
 
   @protected
-  Task sse_decode_task(SseDeserializer deserializer);
+  List<NodeStats> sse_decode_list_node_stats(SseDeserializer deserializer);
+
+  @protected
+  Uint64List sse_decode_list_prim_u_64_strict(SseDeserializer deserializer);
+
+  @protected
+  NodeStats sse_decode_node_stats(SseDeserializer deserializer);
+
+  @protected
+  NodeStats? sse_decode_opt_box_autoadd_node_stats(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer);
+
+  @protected
+  SchedulerConfig sse_decode_scheduler_config(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_u_32(SseDeserializer deserializer);
 
   @protected
   BigInt sse_decode_u_64(SseDeserializer deserializer);
@@ -105,15 +169,29 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
-  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
-    Scheduler self,
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    LatencyScheduler self,
     SseSerializer serializer,
   );
 
   @protected
   void
-  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
-    Scheduler self,
+  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    LatencyScheduler self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    LatencyScheduler self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
+    LatencyScheduler self,
     SseSerializer serializer,
   );
 
@@ -121,19 +199,55 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
-  void sse_encode_box_autoadd_task(Task self, SseSerializer serializer);
+  void sse_encode_box_autoadd_node_stats(
+    NodeStats self,
+    SseSerializer serializer,
+  );
 
   @protected
-  void sse_encode_list_task(List<Task> self, SseSerializer serializer);
+  void sse_encode_box_autoadd_scheduler_config(
+    SchedulerConfig self,
+    SseSerializer serializer,
+  );
 
   @protected
-  void sse_encode_opt_box_autoadd_task(Task? self, SseSerializer serializer);
+  void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer);
 
   @protected
-  void sse_encode_scheduler(Scheduler self, SseSerializer serializer);
+  void sse_encode_f_64(double self, SseSerializer serializer);
 
   @protected
-  void sse_encode_task(Task self, SseSerializer serializer);
+  void sse_encode_list_node_stats(
+    List<NodeStats> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_prim_u_64_strict(
+    Uint64List self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_node_stats(NodeStats self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_node_stats(
+    NodeStats? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_scheduler_config(
+    SchedulerConfig self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_u_32(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_64(BigInt self, SseSerializer serializer);
@@ -163,36 +277,36 @@ class RustLibWire implements BaseWire {
     : _lookup = dynamicLibrary.lookup;
 
   void
-  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
     ffi.Pointer<ffi.Void> ptr,
   ) {
-    return _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
+    return _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
       ptr,
     );
   }
 
-  late final _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSchedulerPtr =
+  late final _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencySchedulerPtr =
       _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>(
-        'frbgen_ayatsuri_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler',
+        'frbgen_ayatsuri_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler',
       );
-  late final _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler =
-      _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSchedulerPtr
+  late final _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler =
+      _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencySchedulerPtr
           .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
 
   void
-  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
     ffi.Pointer<ffi.Void> ptr,
   ) {
-    return _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler(
+    return _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler(
       ptr,
     );
   }
 
-  late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSchedulerPtr =
+  late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencySchedulerPtr =
       _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>(
-        'frbgen_ayatsuri_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler',
+        'frbgen_ayatsuri_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler',
       );
-  late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerScheduler =
-      _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSchedulerPtr
+  late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencyScheduler =
+      _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLatencySchedulerPtr
           .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
 }

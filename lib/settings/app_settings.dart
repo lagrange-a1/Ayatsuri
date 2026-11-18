@@ -179,7 +179,13 @@ Map<String, dynamic> _normalize(Map<String, dynamic> j) {
 
   // Tolerate corrupt non-bool/non-String payloads like the old `== true` /
   // `is String` checks did.
-  for (final key in ['pureBlack', 'autoRotate', 'hideBlocked', 'compact']) {
+  for (final key in [
+    'pureBlack',
+    'autoRotate',
+    'hideBlocked',
+    'compact',
+    'autoApplyRecommendation',
+  ]) {
     m[key] = m[key] == true;
   }
   for (final key in ['bg', 'bgPath', 'serverUrl', 'secret']) {
@@ -244,6 +250,11 @@ abstract class AppSettings with _$AppSettings {
 
     /// Hysteresis threshold in milliseconds to avoid switching unless new is better by at least this amount.
     @Default(50) int hysteresisMs,
+
+    /// Opt-in: in a country's node sheet, apply the Rust/Dart recommendation
+    /// after the first probe round. A manual tap always wins and disables
+    /// auto-apply for the rest of that sheet session.
+    @Default(false) bool autoApplyRecommendation,
   }) = _AppSettings;
 
   const AppSettings._();

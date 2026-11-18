@@ -6,62 +6,191 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `normalized`, `now_ms_for_stats`, `score`, `view`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `NodeState`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`
 
-/// frb_marker: #[frb(start)]
-Future<void> schedulerLibInit() => RustLib.instance.api.crateSchedulerLibInit();
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<LatencyScheduler>>
+abstract class LatencyScheduler implements RustOpaqueInterface {
+  /// Choose the best candidate, keeping `current` unless the improvement
+  /// exceeds hysteresis and the cooldown has elapsed.
+  Future<NodeStats?> best({
+    required Uint64List candidates,
+    BigInt? current,
+    required BigInt nowMs,
+  });
 
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Scheduler>>
+  Future<void> clear();
 
-/// frb_marker: #[frb(opaque)]
-class Scheduler {
-  final List<Task> tasks;
+  /// Hot-apply settings without discarding observed samples.
+  Future<void> configure({required SchedulerConfig config});
 
-  const Scheduler({required this.tasks});
-
-  /// frb_marker: #[frb()]
-  Future<void> addTask({required Task task}) =>
-      RustLib.instance.api.crateSchedulerAddTask(that: this, task: task);
+  /// Record a failed probe. A timeout counts double: it consumed the full
+  /// timeout budget rather than being answered promptly as "blocked".
+  Future<void> fail({
+    required BigInt id,
+    required bool timeout,
+    required BigInt nowMs,
+  });
 
   // HINT: Make it `#[frb(sync)]` to let it become the default constructor of Dart class.
-  /// frb_marker: #[frb()]
-  static Future<Scheduler> newInstance() =>
-      RustLib.instance.api.crateSchedulerNew();
+  static Future<LatencyScheduler> newInstance({
+    required SchedulerConfig config,
+  }) => RustLib.instance.api.crateLatencySchedulerNew(config: config);
 
-  /// frb_marker: #[frb()]
-  Future<Task?> nextTask() =>
-      RustLib.instance.api.crateSchedulerNextTask(that: this);
+  /// Record a successful probe. `latency_ms` must be positive; blocked and
+  /// timeout results go through `fail` instead.
+  Future<void> observe({
+    required BigInt id,
+    required BigInt latencyMs,
+    required BigInt nowMs,
+  });
 
-  /// frb_marker: #[frb()]
-  Future<bool> removeTask({required BigInt id}) =>
-      RustLib.instance.api.crateSchedulerRemoveTask(that: this, id: id);
+  /// All available candidates sorted by score (ascending), non-destructive.
+  Future<List<NodeStats>> rank({
+    required Uint64List candidates,
+    required BigInt nowMs,
+  });
 
-  @override
-  int get hashCode => tasks.hashCode;
+  Future<void> remove({required BigInt id});
 
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is Scheduler &&
-          runtimeType == other.runtimeType &&
-          tasks == other.tasks;
+  Future<NodeStats?> stats({required BigInt id});
 }
 
-/// frb_marker: #[frb()]
-class Task {
+/// Non-destructive view of one node, returned by `rank`, `best` and `stats`.
+class NodeStats {
   final BigInt id;
-  final BigInt latency;
 
-  const Task({required this.id, required this.latency});
+  /// Exponentially weighted mean latency.
+  final double ewma;
+
+  /// Exponentially weighted mean absolute deviation from the EWMA.
+  final double jitter;
+  final int samples;
+  final int failures;
+  final bool available;
+
+  /// Lower is better. Includes jitter, failure, staleness and exploration.
+  final double score;
+
+  /// Milliseconds since the last successful sample.
+  final BigInt ageMs;
+
+  const NodeStats({
+    required this.id,
+    required this.ewma,
+    required this.jitter,
+    required this.samples,
+    required this.failures,
+    required this.available,
+    required this.score,
+    required this.ageMs,
+  });
 
   @override
-  int get hashCode => id.hashCode ^ latency.hashCode;
+  int get hashCode =>
+      id.hashCode ^
+      ewma.hashCode ^
+      jitter.hashCode ^
+      samples.hashCode ^
+      failures.hashCode ^
+      available.hashCode ^
+      score.hashCode ^
+      ageMs.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is Task &&
+      other is NodeStats &&
           runtimeType == other.runtimeType &&
           id == other.id &&
-          latency == other.latency;
+          ewma == other.ewma &&
+          jitter == other.jitter &&
+          samples == other.samples &&
+          failures == other.failures &&
+          available == other.available &&
+          score == other.score &&
+          ageMs == other.ageMs;
+}
+
+/// Routing tunables. All penalties are in milliseconds, so they are directly
+/// comparable with a latency sample and with `hysteresis_ms`.
+///
+/// The Dart wrapper keeps an identical copy of this struct so that a device
+/// without a loadable dylib/webassembly still gets the same decisions.
+class SchedulerConfig {
+  /// EWMA smoothing factor in [0, 1]. Larger = reacts faster to change.
+  final double alpha;
+
+  /// Weight applied to the EWMA of |sample - ewma| (jitter).
+  final double jitterWeight;
+
+  /// Extra score added per consecutive failed probe.
+  final double failurePenaltyMs;
+
+  /// Extra score added when a node has not been sampled recently.
+  final double stalePenaltyMs;
+
+  /// Minimum improvement before `best` switches away from the current node.
+  final double hysteresisMs;
+
+  /// Minimum time between two automatic switches.
+  final BigInt cooldownMs;
+
+  /// Consecutive failures after which a node is excluded from ranking.
+  final int maxFailures;
+
+  /// Age after which `stale_penalty_ms` starts accumulating.
+  final BigInt staleAfterMs;
+
+  /// Samples below this count receive an exploration bonus in ranking.
+  final int exploreMinSamples;
+
+  /// Per-missing-sample exploration bonus, subtracted from the score.
+  final double exploreBonusMs;
+
+  const SchedulerConfig({
+    required this.alpha,
+    required this.jitterWeight,
+    required this.failurePenaltyMs,
+    required this.stalePenaltyMs,
+    required this.hysteresisMs,
+    required this.cooldownMs,
+    required this.maxFailures,
+    required this.staleAfterMs,
+    required this.exploreMinSamples,
+    required this.exploreBonusMs,
+  });
+
+  static Future<SchedulerConfig> default_() =>
+      RustLib.instance.api.crateSchedulerConfigDefault();
+
+  @override
+  int get hashCode =>
+      alpha.hashCode ^
+      jitterWeight.hashCode ^
+      failurePenaltyMs.hashCode ^
+      stalePenaltyMs.hashCode ^
+      hysteresisMs.hashCode ^
+      cooldownMs.hashCode ^
+      maxFailures.hashCode ^
+      staleAfterMs.hashCode ^
+      exploreMinSamples.hashCode ^
+      exploreBonusMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SchedulerConfig &&
+          runtimeType == other.runtimeType &&
+          alpha == other.alpha &&
+          jitterWeight == other.jitterWeight &&
+          failurePenaltyMs == other.failurePenaltyMs &&
+          stalePenaltyMs == other.stalePenaltyMs &&
+          hysteresisMs == other.hysteresisMs &&
+          cooldownMs == other.cooldownMs &&
+          maxFailures == other.maxFailures &&
+          staleAfterMs == other.staleAfterMs &&
+          exploreMinSamples == other.exploreMinSamples &&
+          exploreBonusMs == other.exploreBonusMs;
 }
