@@ -8,6 +8,11 @@ import 'package:ayatsuri/scheduler/lib.dart';
 /// and maintain smoothed latency metrics for each proxy. When the Rust FFI
 /// bridge is unavailable, it falls back to an in-memory Dart scheduler that
 /// preserves EMA smoothing and lowest-latency selection.
+///
+/// The EMA smoothing factor is instance-configurable via [emaAlpha]; the
+/// hysteresis used by [bestProxy] is supplied per call. All ranking helpers
+/// ([ranked], [smoothedFor], [snapshot], [bestProxy]) read the Dart-side
+/// mirror and never touch the destructive Rust `nextTask()` operation.
 class SchedulerWrapper {
   // Ensure the Rust library is initialized exactly once.
   static Future<void>? _initialization;
@@ -17,7 +22,36 @@ class SchedulerWrapper {
   // fails (e.g. no linked dylib / RustLib.init was never called).
   static bool _rustAvailable = true;
 
-  SchedulerWrapper();
+  /// Default EMA smoothing factor (promoted from the old private constant).
+  static const double defaultEmaAlpha = 0.2;
+
+  /// Default hysteresis (ms) for [bestProxy], matching `AppSettings`.
+  static const int defaultHysteresisMs = 50;
+
+  /// Clamp an EMA factor to the valid `[0, 1]` range.
+  static double _clampAlpha(double value) {
+    if (value < 0) return 0.0;
+    if (value > 1) return 1.0;
+    return value;
+  }
+
+  SchedulerWrapper({double emaAlpha = SchedulerWrapper.defaultEmaAlpha})
+    : _emaAlpha = _clampAlpha(emaAlpha);
+
+  double _emaAlpha;
+
+  /// Read/write EMA factor. The setter clamps to `[0, 1]`, and
+  /// [updateLatency] reads this value on every call (both backends), so
+  /// changing it takes effect for subsequent samples without any reset.
+  double get emaAlpha => _emaAlpha;
+  set emaAlpha(double value) => _emaAlpha = _clampAlpha(value);
+
+  final Map<String, double> _smoothedLatencies = {};
+  final Map<String, BigInt> _proxyIds = {};
+  int _nextId = 0;
+
+  // Dart fallback: proxy id -> smoothed latency, used when Rust is missing.
+  final Map<BigInt, BigInt> _fallbackLatencies = {};
 
   /// Initialize the Rust scheduler (once).
   ///
@@ -43,23 +77,16 @@ class SchedulerWrapper {
     await _initialization;
   }
 
-  // EMA smoothing factor (default 0.2)
-  static const double _defaultEmaAlpha = 0.2;
-
-  final Map<String, double> _smoothedLatencies = {};
-  final Map<String, BigInt> _proxyIds = {};
-  int _nextId = 0;
-
-  // Dart fallback: proxy id -> smoothed latency, used when Rust is missing.
-  final Map<BigInt, BigInt> _fallbackLatencies = {};
-
-  /// Update the latency for a proxy, maintaining EMA and adding task to scheduler.
+  /// Update the latency for a proxy, maintaining EMA and adding task to
+  /// scheduler. The configured [emaAlpha] is used by both the Rust and the
+  /// Dart-fallback paths (the smoothing happens once, before the branch).
   Future<void> updateLatency(String proxy, int latency) async {
     await _ensureRustInit();
+    final alpha = emaAlpha;
     double smoothed;
     if (_smoothedLatencies.containsKey(proxy)) {
       final old = _smoothedLatencies[proxy]!;
-      smoothed = _defaultEmaAlpha * latency + (1 - _defaultEmaAlpha) * old;
+      smoothed = alpha * latency + (1 - alpha) * old;
     } else {
       smoothed = latency.toDouble();
     }
@@ -83,7 +110,8 @@ class SchedulerWrapper {
   /// Get the best proxy according to the scheduler.
   ///
   /// Removes and returns the name of the lowest-latency task from whichever
-  /// backend is active; ties are broken by the smallest proxy id.
+  /// backend is active; ties are broken by the smallest proxy id (insertion
+  /// order). Kept for backwards compatibility — this is a destructive pop.
   Future<String?> getBestProxy() async {
     await _ensureRustInit();
 
@@ -108,11 +136,75 @@ class SchedulerWrapper {
     return null;
   }
 
-  // Optionally, reset state
+  /// Non-destructive: all registered proxies sorted by smoothed latency
+  /// ascending; ties broken by name for a stable, repeatable order.
+  ///
+  /// Reads only the Dart-side mirror, so it works even when Rust is
+  /// unavailable and never calls the destructive `nextTask()`.
+  List<MapEntry<String, double>> ranked() {
+    final entries = _smoothedLatencies.entries.toList();
+    entries.sort((a, b) {
+      final byLatency = a.value.compareTo(b.value);
+      if (byLatency != 0) return byLatency;
+      return a.key.compareTo(b.key);
+    });
+    return entries;
+  }
+
+  /// Non-destructive lookup of a proxy's smoothed latency; `null` if unknown.
+  double? smoothedFor(String proxy) => _smoothedLatencies[proxy];
+
+  /// Remove a proxy from every mirror and, when the Rust backend is active,
+  /// from the scheduler task list as well. Unknown names are a no-op.
+  Future<void> remove(String proxy) async {
+    final id = _proxyIds.remove(proxy);
+    _smoothedLatencies.remove(proxy);
+    if (id == null) return;
+    _fallbackLatencies.remove(id);
+    if (_rustAvailable && _scheduler != null) {
+      await _scheduler!.removeTask(id: id);
+    }
+  }
+
+  /// Thin convenience alias for [ranked] (compatibility with callers that
+  /// expect a `snapshot()` name). Returns a fresh list each call.
+  List<MapEntry<String, double>> snapshot() => ranked();
+
+  /// Thin convenience alias for [remove].
+  Future<void> removeProxy(String proxy) => remove(proxy);
+
+  /// Non-destructive chooser with hysteresis.
+  ///
+  /// Picks the lowest-smoothed-latency proxy, but keeps [current] unless the
+  /// best candidate is better by at least [hysteresisMs] (clamped to
+  /// `[0, 5000]`, matching settings normalization). `hysteresisMs == 0`
+  /// therefore means "always take the best". Blocked/timeout samples
+  /// (non-positive smoothed values) never win. Uses [ranked] and
+  /// [smoothedFor] only, so repeated calls are stable and nothing is popped.
+  String? bestProxy({String? current, int? hysteresisMs}) {
+    final hyst = (hysteresisMs ?? defaultHysteresisMs).clamp(0, 5000);
+    final usable = ranked().where((e) => e.value > 0).toList();
+    if (usable.isEmpty) return null;
+    final top = usable.first;
+
+    if (current == null) return top.key;
+    final anchorLatency = smoothedFor(current);
+    if (anchorLatency == null || anchorLatency <= 0) return top.key;
+    if (top.key == current) return current;
+    if (anchorLatency - top.value < hyst) return current;
+    return top.key;
+  }
+
+  /// Clear all state — both this instance's mirrors and the shared static
+  /// scheduler/init flags, so a subsequent call re-initializes from scratch.
+  /// This also removes the cross-instance pollution caused by the statics.
   void reset() {
-    _smoothedLatencies.clear();
-    _proxyIds.clear();
-    _nextId = 0;
+    _scheduler = null;
+    _initialization = null;
+    _rustAvailable = true;
     _fallbackLatencies.clear();
+    _proxyIds.clear();
+    _smoothedLatencies.clear();
+    _nextId = 0;
   }
 }

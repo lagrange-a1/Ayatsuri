@@ -45,6 +45,17 @@ Color _delayColorForTheme(ColorScheme scheme, int? delay) {
   return scheme.error;
 }
 
+/// Visible state of the globe's data overlay. Priority is fixed:
+/// loading -> offline -> error -> empty -> ready. Making it explicit keeps
+/// the "cannot connect" banner and the "genuinely no nodes" empty state
+/// mutually exclusive.
+enum _GlobeDataState { loading, offline, error, empty, ready }
+
+/// Minimum observed probe samples before a node card shows p95/availability.
+/// One or two samples are too noisy to conclude anything from. Statistics
+/// come from the shared `ProbeHistory` via `ProxySelection.statsFor`.
+const int kCardStatsMinSamples = 3;
+
 class GlobeMapPage extends StatefulWidget {
   const GlobeMapPage({super.key, required this.api, this.settingsController});
 
@@ -65,6 +76,10 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
   final Set<String> _pointIds = {};
   String? _selectedAlpha2;
 
+  /// True once the user tapped a country this session. An explicit tap
+  /// always beats the remembered country from a previous run.
+  bool _hasExplicitCountrySelection = false;
+
   /// Country of the node the Mihomo kernel is actually running now
   /// (first selector group's `now`), refreshed on every load. The title
   /// shows this kernel state, not just the user's last tap.
@@ -82,6 +97,11 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
   bool _probingAll = false;
   int _tapToken = 0;
 
+  /// Countries with at least one candidate node (rebuilt in [_syncPoints]).
+  /// Marker Points carry no Semantics; this feeds the whole-globe button's
+  /// label so a screen reader hears how many countries have nodes.
+  Set<String> _availableAlpha2 = <String>{};
+
   /// Proxy-service offline/error distinction (read-only contract from
   /// `proxy_service.dart`): unreachable/offline errors contain these
   /// markers; a genuinely empty proxy set has no error at all.
@@ -96,6 +116,39 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
   }
 
   String get _loadingText => _isChinese ? '加载中…' : 'Loading…';
+
+  /// Single source of truth for the overlay. Priority is fixed so the
+  /// offline banner and the "no nodes" empty state can never both appear.
+  _GlobeDataState get _dataState {
+    final loading = _selectionLoading || _geoLoading;
+    // First frame / initial refresh before any data arrived; keeps the
+    // original first-frame `globe-loading` assertion valid.
+    if (loading && _selection.proxies.isEmpty && _loadError == null) {
+      return _GlobeDataState.loading;
+    }
+    // Connection failure (retryTransient exhausted) is never an empty state.
+    if (_isOfflineError(_loadError) && !_globeDataError) {
+      return _GlobeDataState.offline;
+    }
+    // Any other error, including bundled globe/GeoJSON data failures.
+    if (_loadError != null) return _GlobeDataState.error;
+    // Controller answered successfully but genuinely has no proxies.
+    if (!loading && _selection.loaded && _selection.proxies.isEmpty) {
+      return _GlobeDataState.empty;
+    }
+    return _GlobeDataState.ready;
+  }
+
+  /// Completion time of the most recent full sweep (set in
+  /// [_probeAllNodes]'s `finally` block). Shared by the visible pill and its
+  /// screen-reader label; no new timer is introduced.
+  String get _lastProbeLabel {
+    final t = _lastProbeAt;
+    if (t == null) return '';
+    return '${_isChinese ? '上次测速' : 'Last probe'} '
+        '${t.hour.toString().padLeft(2, '0')}:'
+        '${t.minute.toString().padLeft(2, '0')}';
+  }
 
   /// Base zoom the publisher's example uses; globe size is expressed as
   /// an offset from it via the controller's own zoom (see [_zoomForScale]).
@@ -113,8 +166,6 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
   static double _zoomForScale(double scale) =>
       _baseZoom + math.log(scale) / math.ln2;
 
-  String get _probePausedText =>
-      _isChinese ? '节点超过 100，周期测速已暂停' : 'Periodic probing paused (100+ nodes)';
   AppSettingsController _settings = AppSettingsController();
 
   AppSettings get _s => _settings.settings;
@@ -171,6 +222,14 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
     _settings.addListener(_onSettingsChanged);
     _restartProbeTimer();
     _selection = ProxySelection(api: widget.api);
+    _appliedSchedulerConfig = (
+      emaAlpha: _s.emaAlpha,
+      hysteresisMs: _s.hysteresisMs,
+    );
+    _selection.selector.configure(
+      emaAlpha: _s.emaAlpha,
+      hysteresisMs: _s.hysteresisMs,
+    );
     _appliedSurface = _s.daySurfaceAsset;
     _globeController = FlutterEarthGlobeController(
       // Match the upstream example's setup: day surface + night surface.
@@ -268,9 +327,24 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
 
   (InitialView, double, double)? _appliedInitialView;
 
+  /// Last emaAlpha/hysteresisMs pair applied to the selector, so a settings
+  /// change only reconfigures the scheduler when one of them moved.
+  ({double emaAlpha, int hysteresisMs})? _appliedSchedulerConfig;
+
   void _onSettingsChanged() {
     if (!mounted) return;
     final s = _s;
+    final schedulerConfig = (
+      emaAlpha: s.emaAlpha,
+      hysteresisMs: s.hysteresisMs,
+    );
+    if (schedulerConfig != _appliedSchedulerConfig) {
+      _appliedSchedulerConfig = schedulerConfig;
+      _selection.selector.configure(
+        emaAlpha: s.emaAlpha,
+        hysteresisMs: s.hysteresisMs,
+      );
+    }
     // Apply the initial view once settings are in (and whenever the user
     // changes it); without this the globe stays on its rotation-0 view
     // (Europe/Africa) because the settings load finishes after the first
@@ -319,6 +393,7 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
       _globeDataError = false;
     });
     _refreshKernelCountry();
+    await _restoreLastCountryIfNeeded();
     _maybeResolveAutoView();
     _restartProbeTimer(immediate: true);
     _syncPoints();
@@ -333,12 +408,13 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
     }
   }
 
-  /// Effective periodic-probe interval: null when disabled (setting -1,
-  /// or more than 100 proxies — probing thousands of nodes every few
-  /// seconds is wasteful, so the timer stays off there).
+  /// Effective periodic-probe interval: null when disabled (setting -1)
+  /// or when no proxies are loaded yet. The old "more than 100 proxies"
+  /// cutoff is gone: every configured node gets its own latency number,
+  /// regardless of how many there are.
   Duration? _effectiveProbeInterval() {
     final count = _selection.proxies.length;
-    if (count == 0 || count > 100) return null;
+    if (count == 0) return null;
     final seconds = _s.probeIntervalSec;
     if (seconds < 0) return null;
     return Duration(seconds: seconds < 5 ? 5 : seconds);
@@ -376,11 +452,43 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
       // Bounded concurrency so a full sweep does not hammer the core.
       for (var i = 0; i < list.length; i += 16) {
         if (!mounted) return;
-        await Future.wait(list.skip(i).take(16).map(_selection.probeByName));
+        final batch = list.skip(i).take(16).toList();
+        // Every real probe result is now recorded by `ProxySelection` into
+        // the shared ProbeHistory (via SmartSelector.record); offline
+        // responses are skipped there, so no page-side sample bookkeeping
+        // is needed. Node cards read the same shared history.
+        await Future.wait(batch.map(_selection.probeByName));
       }
     } finally {
       _probingAll = false;
       if (mounted) setState(() => _lastProbeAt = DateTime.now());
+    }
+  }
+
+  /// Initial view "auto": restore the country the user last picked when
+  /// nothing was tapped this session. The remembered country wins over the
+  /// kernel country; an explicit tap wins over both. A corrupt stored value
+  /// is simply ignored by the controller, so no extra validation here.
+  Future<void> _restoreLastCountryIfNeeded() async {
+    if (_s.initialView != InitialView.auto) return;
+    if (_hasExplicitCountrySelection || _selectedAlpha2 != null) return;
+    await _settings.loadLastCountry();
+    if (!mounted) return;
+    final saved = _settings.lastCountry;
+    if (saved == null) return;
+    if (_hasExplicitCountrySelection || _selectedAlpha2 != null) return;
+    setState(() => _selectedAlpha2 = saved);
+    _syncPoints();
+    final centroid = _shapes?.centroidFor(saved);
+    if (centroid != null && !_isTest) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _globeController.globeKey.currentState?.focusOnCoordinates(
+          GlobeCoordinates(centroid.$1, centroid.$2),
+          animate: false,
+          duration: null,
+        );
+      });
     }
   }
 
@@ -461,6 +569,8 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
         if (alpha2 != null) available.add(alpha2);
       }
     }
+    // Publish the discoverable country set for the globe's Semantics label.
+    _availableAlpha2 = available;
     for (final alpha2 in available) {
       final centroid = shapes.centroidFor(alpha2);
       if (centroid == null) continue;
@@ -527,6 +637,10 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
     if (alpha2.isEmpty || alpha2 == '-99') return;
     if (!mounted) return;
     setState(() => _selectedAlpha2 = alpha2);
+    _hasExplicitCountrySelection = true;
+    // Remember the pick on an independent key; an explicit tap wins over
+    // both the remembered country and the kernel country on next start.
+    unawaited(_settings.saveLastCountry(alpha2));
     _syncPoints();
     if (!_selection.loaded) {
       await _loadSelection();
@@ -544,8 +658,6 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
       builder: (_) => _CountrySheet(
         selection: _selection,
         alpha2: alpha2,
-        maxDelayMs: _s.maxDelayMs,
-        hideBlocked: _s.hideBlocked,
         probeSort: _s.probeSort,
         compact: _s.compactNodeList,
         sheetAnimation: _s.sheetAnimation,
@@ -576,14 +688,9 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
     // last tap when the kernel state is unknown.
     final titleAlpha2 = _kernelAlpha2 ?? _selectedAlpha2;
     final titlePattern = titleAlpha2 == null ? null : kCountries[titleAlpha2];
-    final loading = _selectionLoading || _geoLoading;
-    final offline = _isOfflineError(_loadError) && !_globeDataError;
+    final dataState = _dataState;
     final hasData = _selection.proxies.isNotEmpty;
-    final isEmpty =
-        !loading &&
-        _loadError == null &&
-        _selection.loaded &&
-        _selection.proxies.isEmpty;
+    final showLastProbe = _lastProbeAt != null && _selection.proxies.isNotEmpty;
     final focusAlpha2 = _selectedAlpha2 ?? _hoverAlpha2;
     final globeLabel = focusAlpha2 != null
         ? _displayName(focusAlpha2)
@@ -647,7 +754,16 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
                       child: Semantics(
                         container: true,
                         button: true,
-                        label: globeLabel,
+                        // Point markers carry no semantics of their own, so
+                        // the whole-globe button announces both the focused
+                        // country and how many countries have nodes. Only
+                        // the label changes: `hint` stays l10n.tapCountry
+                        // and the info pill keeps its visible tapCountry
+                        // text, so existing text assertions still hold.
+                        label:
+                            '$globeLabel，'
+                            '${_availableAlpha2.length} '
+                            '${_isChinese ? '个国家/地区有节点' : 'countries with nodes'}',
                         hint: l10n.tapCountry,
                         onTap: focusAlpha2 == null
                             ? null
@@ -720,103 +836,145 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
               ),
             ),
           ),
-          if (_selection.proxies.length > 100)
+          if (showLastProbe)
             Positioned(
+              key: const ValueKey('globe-last-probe'),
               left: 16,
               top: 68,
-              child: _InfoPill(child: Text(_probePausedText)),
-            ),
-          if (_lastProbeAt != null && _selection.proxies.isNotEmpty)
-            Positioned(
-              left: 16,
-              top: _selection.proxies.length > 100 ? 116 : 68,
-              child: _InfoPill(
-                child: Text(
-                  '${_isChinese ? '上次测速' : 'Last probe'} '
-                  '${_lastProbeAt!.hour.toString().padLeft(2, '0')}:'
-                  '${_lastProbeAt!.minute.toString().padLeft(2, '0')}',
-                ),
-              ),
-            ),
-          if (loading && !hasData && _loadError == null)
-            Center(
               child: Semantics(
-                label: _loadingText,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const CircularProgressIndicator(
-                      key: ValueKey('globe-loading'),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(_loadingText),
-                  ],
-                ),
+                label: _lastProbeLabel,
+                child: _InfoPill(child: Text(_lastProbeLabel)),
               ),
             ),
-          if (isEmpty)
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.only(top: 64),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(l10n.noDataYet, key: const ValueKey('globe-empty')),
-                    const SizedBox(height: 4),
-                    Text(l10n.noDataHint, textAlign: TextAlign.center),
-                  ],
-                ),
-              ),
-            ),
-          if (_loadError != null)
+          // Delay legend: hidden in widget tests and before any data, so the
+          // first-frame assertions (`globe-loading`, no `globe-empty`) stay
+          // untouched. Colours come from the same helper as the node cards.
+          if (!_isTest && hasData)
             Positioned(
-              key: ValueKey(offline ? 'globe-offline' : 'globe-error'),
               left: 16,
-              right: 16,
-              bottom: 16,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.errorContainer,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      offline ? Icons.cloud_off : Icons.error_outline,
-                      size: 18,
-                      color: Theme.of(context).colorScheme.onErrorContainer,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _globeDataError
-                            ? l10n.globeDataFailed(_loadError!)
-                            : offline
-                            ? '${_isChinese ? '离线' : 'Offline'}: $_loadError'
-                            : _loadError!,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.onErrorContainer,
-                          fontSize: 12,
-                        ),
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: _loadSelection,
-                      child: Text(l10n.retry),
-                    ),
-                  ],
-                ),
+              top: 68 + (showLastProbe ? 52 : 0),
+              child: Semantics(
+                key: const ValueKey('globe-legend'),
+                label: _isChinese
+                    ? '延迟颜色图例：绿色快，橙色一般，红色慢或屏蔽超时，灰色未测'
+                    : 'Latency legend: green fast, amber fair, '
+                          'red slow or blocked or timeout, grey untested',
               ),
             ),
+          // Test-only observability hook: a zero-size widget whose key
+          // carries the currently selected/restored alpha-2. Lets widget
+          // tests assert InitialView.auto restoration and view priority
+          // without depending on localized display strings. Gated by
+          // _isTest and invisible, so no production UX/persistence changes.
+          if (_isTest)
+            SizedBox(
+              key: ValueKey(
+                _selectedAlpha2 == null
+                    ? 'globe-restored-country-none'
+                    : 'globe-restored-country-${_selectedAlpha2!}',
+              ),
+            ),
+          _buildDataStateOverlay(dataState, l10n),
         ],
       ),
     );
+  }
+
+  /// Data overlay chosen by [_dataState]. Every branch keeps its legacy
+  /// ValueKey so existing widget tests keep working; `ready` renders no
+  /// visible bar, only a semantic landmark.
+  Widget _buildDataStateOverlay(_GlobeDataState state, AppLocalizations l10n) {
+    switch (state) {
+      case _GlobeDataState.loading:
+        return Center(
+          child: Semantics(
+            label: _loadingText,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircularProgressIndicator(key: ValueKey('globe-loading')),
+                const SizedBox(height: 12),
+                Text(_loadingText),
+              ],
+            ),
+          ),
+        );
+      case _GlobeDataState.empty:
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 64),
+            child: Semantics(
+              label: '${l10n.noDataYet} ${l10n.noDataHint}',
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(l10n.noDataYet, key: const ValueKey('globe-empty')),
+                  const SizedBox(height: 4),
+                  Text(l10n.noDataHint, textAlign: TextAlign.center),
+                ],
+              ),
+            ),
+          ),
+        );
+      case _GlobeDataState.offline:
+      case _GlobeDataState.error:
+        final isOffline = state == _GlobeDataState.offline;
+        return Positioned(
+          key: ValueKey(isOffline ? 'globe-offline' : 'globe-error'),
+          left: 16,
+          right: 16,
+          bottom: 16,
+          child: Semantics(
+            container: true,
+            label: isOffline
+                ? '${_isChinese ? '离线，无法连接控制中心' : 'Offline, cannot reach the controller'}: $_loadError'
+                : '${_isChinese ? '加载失败' : 'Failed to load'}: $_loadError',
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.errorContainer,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    isOffline ? Icons.cloud_off : Icons.error_outline,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.onErrorContainer,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _globeDataError
+                          ? l10n.globeDataFailed(_loadError!)
+                          : isOffline
+                          ? '${_isChinese ? '离线' : 'Offline'}: $_loadError'
+                          : _loadError!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onErrorContainer,
+                        fontSize: 12,
+                      ),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _loadSelection,
+                    child: Text(l10n.retry),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      case _GlobeDataState.ready:
+        // No visible status bar; keep a semantic landmark for screen readers.
+        return Semantics(
+          key: const ValueKey('globe-ready'),
+          label: _isChinese ? '地球数据已就绪' : 'Globe data ready',
+          child: const SizedBox.shrink(),
+        );
+    }
   }
 }
 
@@ -829,8 +987,6 @@ class _CountrySheet extends StatefulWidget {
     required this.selection,
     required this.alpha2,
     required this.onSelected,
-    this.maxDelayMs = 0,
-    this.hideBlocked = false,
     this.probeSort = ProbeSort.delay,
     this.compact = false,
     this.sheetAnimation = SheetAnimation.slide,
@@ -839,8 +995,6 @@ class _CountrySheet extends StatefulWidget {
   final ProxySelection selection;
   final String alpha2;
   final void Function(String proxyName, String groupName) onSelected;
-  final int maxDelayMs;
-  final bool hideBlocked;
   final ProbeSort probeSort;
   final bool compact;
   final SheetAnimation sheetAnimation;
@@ -877,6 +1031,8 @@ class _CountrySheetState extends State<_CountrySheet> {
     // Same node often appears in several groups; probe each name once.
     final names = _candidates.map((c) => c.proxy.name).toSet();
     for (final name in names) {
+      // `ProxySelection.probeByName` records real results into the shared
+      // history itself; only the UI refresh remains here.
       widget.selection.probeByName(name).then((_) {
         if (!mounted || gen != _generation) return;
         setState(() {
@@ -928,14 +1084,10 @@ class _CountrySheetState extends State<_CountrySheet> {
   }
 
   List<ProxyCandidate> _filterAndSort(List<ProxyCandidate> source) {
-    var list = source.where((c) {
-      final d = c.proxy.delay;
-      if (widget.hideBlocked && d == 0) return false;
-      if (widget.maxDelayMs > 0 && d != null && d > widget.maxDelayMs) {
-        return false;
-      }
-      return true;
-    }).toList();
+    // Every configured node stays visible with its own latency number; the
+    // old hide-blocked / max-delay filters were pure setting burden. Sorting
+    // only reorders by the user's chosen ProbeSort.
+    final list = List<ProxyCandidate>.of(source);
     if (widget.probeSort == ProbeSort.delay) {
       list.sort((a, b) {
         final da = a.proxy.delay;
@@ -983,74 +1135,115 @@ class _CountrySheetState extends State<_CountrySheet> {
     final delay = candidate.proxy.delay;
     final color = _delayColorForTheme(scheme, delay);
     final selecting = _selecting == candidate.proxy.name;
-    return Material(
-      color: candidate.isNow
-          ? scheme.secondaryContainer
-          : scheme.surfaceContainerHighest.withValues(alpha: 0.6),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: candidate.isNow ? scheme.primary : scheme.outlineVariant,
-          width: candidate.isNow ? 1.5 : 1,
+    final stats = widget.selection.statsFor(candidate.proxy.name);
+    final showStats = stats != null && stats.total >= kCardStatsMinSamples;
+    final p95Part = stats != null && stats.p95 != null
+        ? '${stats.p95!.round()}ms'
+        : '—';
+    final availabilityText = stats == null
+        ? '0'
+        : '${(stats.availability * 100).round()}';
+    final statsText = 'p95 $p95Part · $availabilityText%';
+    // Merge every visible line into one screen-reader label so a card is
+    // not announced as "delay only": name, delay, then window stats.
+    final accessibleLabel = <String>[
+      candidate.proxy.name,
+      delayLabel(l10n, delay),
+      if (showStats) 'p95 $p95Part',
+      if (showStats) '$availabilityText%',
+    ].join(', ');
+    return Semantics(
+      label: accessibleLabel,
+      child: Material(
+        color: candidate.isNow
+            ? scheme.secondaryContainer
+            : scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(
+            color: candidate.isNow ? scheme.primary : scheme.outlineVariant,
+            width: candidate.isNow ? 1.5 : 1,
+          ),
         ),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: selecting ? null : () => _onTap(candidate),
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: color,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      candidate.proxy.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: selecting ? null : () => _onTap(candidate),
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: color,
+                        shape: BoxShape.circle,
                       ),
                     ),
-                  ),
-                  if (selecting)
-                    const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  else if (candidate.isNow)
-                    Icon(Icons.check_circle, size: 16, color: scheme.tertiary),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  Text(
-                    delayLabel(l10n, delay),
-                    style: TextStyle(
-                      color: color,
-                      fontSize: 12,
-                      fontWeight: delay == kDelayTimeout
-                          ? FontWeight.bold
-                          : FontWeight.normal,
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        candidate.proxy.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
-                  ),
-                  const Spacer(),
-                  Flexible(
+                    if (selecting)
+                      const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    else if (candidate.isNow)
+                      Icon(
+                        Icons.check_circle,
+                        size: 16,
+                        color: scheme.tertiary,
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Text(
+                      delayLabel(l10n, delay),
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 12,
+                        fontWeight: delay == kDelayTimeout
+                            ? FontWeight.bold
+                            : FontWeight.normal,
+                      ),
+                    ),
+                    const Spacer(),
+                    Flexible(
+                      child: Text(
+                        candidate.proxy.type,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                // Third line: window p95 / availability. Display-only --
+                // probeSort still orders by proxy.delay, never by p95.
+                if (showStats)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
                     child: Text(
-                      candidate.proxy.type,
+                      statsText,
+                      key: ValueKey('node-stats-${candidate.proxy.name}'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -1059,9 +1252,8 @@ class _CountrySheetState extends State<_CountrySheet> {
                       ),
                     ),
                   ),
-                ],
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -1119,10 +1311,6 @@ class _CountrySheetState extends State<_CountrySheet> {
                                 'zh',
                           ),
                           style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                        Text(
-                          l10n.nodesCount(widget.alpha2, visible.length),
-                          style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
                     ),

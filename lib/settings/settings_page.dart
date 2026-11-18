@@ -32,6 +32,12 @@ String _schemeVariantLabel(DynamicSchemeVariant v) {
   return name[0].toUpperCase() + name.substring(1);
 }
 
+/// No l10n keys exist for the smart-routing settings, and adding them would
+/// require regenerating `app_localizations.dart`. Follow the page's existing
+/// hand-written bilingual pattern instead.
+String _smartLabel(BuildContext context, String zh, String en) =>
+    Localizations.localeOf(context).languageCode == 'zh' ? zh : en;
+
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key, required this.controller});
   final AppSettingsController controller;
@@ -68,7 +74,7 @@ class SettingsPage extends StatelessWidget {
                 selected: {s.locale},
                 onSelectionChanged: (v) => set(s.copyWith(locale: v.first)),
               ),
-              const SizedBox(height: 12),
+              const Divider(height: 32),
               _header(context, l10n.appearance),
               SegmentedButton<ThemeMode>(
                 segments: [
@@ -155,25 +161,7 @@ class SettingsPage extends StatelessWidget {
                 (v) => set(s.copyWith(textScale: v)),
                 '${s.textScale.toStringAsFixed(2)}×',
               ),
-              _header(context, l10n.connection),
-              _SettingsTextField(
-                initialValue: s.serverUrl ?? '',
-                labelText: l10n.serverUrl,
-                hintText: l10n.serverUrlHint,
-                keyboardType: TextInputType.url,
-                onCommit: (v) => set(
-                  s.copyWith(serverUrl: v.trim().isEmpty ? null : v.trim()),
-                ),
-              ),
-              const SizedBox(height: 12),
-              _SettingsTextField(
-                initialValue: s.secret ?? '',
-                labelText: l10n.secret,
-                hintText: l10n.secretHint,
-                obscureText: true,
-                onCommit: (v) => set(s.copyWith(secret: v.isEmpty ? null : v)),
-              ),
-              const Divider(height: 32),
+              const Divider(height: 16),
               _header(context, l10n.background),
               ClipRRect(
                 borderRadius: BorderRadius.circular(16),
@@ -232,7 +220,7 @@ class SettingsPage extends StatelessWidget {
                 (v) => set(s.copyWith(backgroundOpacity: v)),
                 '${(s.backgroundOpacity * 100).round()}%',
               ),
-              const Divider(height: 32),
+              const Divider(height: 16),
               _header(context, l10n.globeHeader),
               Text(
                 l10n.globeQuality,
@@ -310,6 +298,47 @@ class SettingsPage extends StatelessWidget {
                 (v) => set(s.copyWith(markerScale: v)),
                 '${s.markerScale.toStringAsFixed(1)}×',
               ),
+              const Divider(height: 16),
+              _header(context, l10n.animation),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: SheetAnimation.values.map((v) {
+                  final label = switch (v) {
+                    SheetAnimation.slide => l10n.animationSlide,
+                    SheetAnimation.fade => l10n.animationFade,
+                    SheetAnimation.scale => l10n.animationScale,
+                    SheetAnimation.spring => l10n.animationSpring,
+                    SheetAnimation.none => l10n.animationNone,
+                  };
+                  return ChoiceChip(
+                    label: Text(label),
+                    selected: s.sheetAnimation == v,
+                    onSelected: (_) => set(s.copyWith(sheetAnimation: v)),
+                  );
+                }).toList(),
+              ),
+              const Divider(height: 32),
+              _header(context, l10n.connection),
+              _SettingsTextField(
+                initialValue: s.serverUrl ?? '',
+                labelText: l10n.serverUrl,
+                hintText: l10n.serverUrlHint,
+                keyboardType: TextInputType.url,
+                onCommit: (v) => set(
+                  s.copyWith(serverUrl: v.trim().isEmpty ? null : v.trim()),
+                ),
+              ),
+              const SizedBox(height: 12),
+              _SettingsTextField(
+                initialValue: s.secret ?? '',
+                labelText: l10n.secret,
+                hintText: l10n.secretHint,
+                obscureText: true,
+                onCommit: (v) => set(s.copyWith(secret: v.isEmpty ? null : v)),
+              ),
+              const Divider(height: 32),
+              _header(context, _smartLabel(context, '节点与测速', 'Nodes & probe')),
               ListTile(
                 title: Text(l10n.initialView),
                 subtitle: Text(_initialViewLabel(l10n, s.initialView)),
@@ -349,43 +378,26 @@ class SettingsPage extends StatelessWidget {
                   '${s.customLng.round()}°',
                 ),
               ],
-              const Divider(height: 32),
-              _header(context, l10n.nodeProbe),
               _sliderTile(
                 context,
-                l10n.maxDelayShown,
-                s.maxDelayMs.toDouble(),
+                _smartLabel(context, 'EMA 平滑系数', 'EMA smoothing'),
+                s.emaAlpha,
+                0.0,
+                1.0,
+                (v) => set(s.copyWith(emaAlpha: v)),
+                s.emaAlpha.toStringAsFixed(2),
+                sliderKey: const ValueKey('settings-ema-alpha'),
+              ),
+              _sliderTile(
+                context,
+                _smartLabel(context, '切换迟滞', 'Switch hysteresis'),
+                s.hysteresisMs.toDouble(),
                 0,
-                1000,
-                (v) => set(s.copyWith(maxDelayMs: v.round())),
-                s.maxDelayMs == 0
-                    ? l10n.unlimited
-                    : l10n.maxDelayMs(s.maxDelayMs),
+                5000,
+                (v) => set(s.copyWith(hysteresisMs: v.round())),
+                '${s.hysteresisMs} ms',
+                sliderKey: const ValueKey('settings-hysteresis'),
               ),
-              SwitchListTile(
-                title: Text(l10n.hideBlocked),
-                value: s.hideBlocked,
-                onChanged: (v) => set(s.copyWith(hideBlocked: v)),
-              ),
-              SwitchListTile(
-                title: Text(l10n.probeInterval),
-                subtitle: s.probeIntervalSec < 0
-                    ? Text(l10n.probeIntervalOff)
-                    : Text(l10n.probeIntervalSec(s.probeIntervalSec)),
-                value: s.probeIntervalSec >= 0,
-                onChanged: (v) =>
-                    set(s.copyWith(probeIntervalSec: v ? 30 : -1)),
-              ),
-              if (s.probeIntervalSec >= 0)
-                _sliderTile(
-                  context,
-                  l10n.probeInterval,
-                  s.probeIntervalSec.toDouble(),
-                  5,
-                  300,
-                  (v) => set(s.copyWith(probeIntervalSec: v.round())),
-                  l10n.probeIntervalSec(s.probeIntervalSec),
-                ),
               SegmentedButton<ProbeSort>(
                 segments: [
                   ButtonSegment(
@@ -406,24 +418,12 @@ class SettingsPage extends StatelessWidget {
                 onChanged: (v) => set(s.copyWith(compactNodeList: v)),
               ),
               const Divider(height: 32),
-              _header(context, l10n.animation),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: SheetAnimation.values.map((v) {
-                  final label = switch (v) {
-                    SheetAnimation.slide => l10n.animationSlide,
-                    SheetAnimation.fade => l10n.animationFade,
-                    SheetAnimation.scale => l10n.animationScale,
-                    SheetAnimation.spring => l10n.animationSpring,
-                    SheetAnimation.none => l10n.animationNone,
-                  };
-                  return ChoiceChip(
-                    label: Text(label),
-                    selected: s.sheetAnimation == v,
-                    onSelected: (_) => set(s.copyWith(sheetAnimation: v)),
-                  );
-                }).toList(),
+              _header(context, _smartLabel(context, '关于', 'About')),
+              ListTile(
+                title: const Text('Ayatsuri'),
+                subtitle: Text(
+                  _smartLabel(context, '地球节点选择器', 'Globe-based node picker'),
+                ),
               ),
             ],
           ),
@@ -449,11 +449,13 @@ class SettingsPage extends StatelessWidget {
     double min,
     double max,
     ValueChanged<double> onChanged,
-    String suffix,
-  ) {
+    String suffix, {
+    Key? sliderKey,
+  }) {
     return ListTile(
       title: Text(label),
       subtitle: Slider(
+        key: sliderKey,
         value: value.clamp(min, max),
         min: min,
         max: max,

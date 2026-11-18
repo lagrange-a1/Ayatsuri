@@ -33,6 +33,12 @@ part 'app_settings.freezed.dart';
 part 'app_settings.g.dart';
 
 const _prefsKey = 'ayatsuri_settings_v1';
+
+/// Last country/region the user picked, stored independently so the
+/// `AppSettings` field set (and its freezed/json_serializable output) stays
+/// untouched. Must be in the cache allow-list or `getString`/`setString`
+/// throw `ArgumentError` at runtime.
+const lastCountryKey = 'ayatsuri_last_country_v1';
 // The stored document used to carry a `v` schema-version key. It was never
 // read back, and json_serializable does not write getters, so `v` is no
 // longer emitted; old stored documents with `v` still parse (unknown keys
@@ -309,7 +315,7 @@ class _WithCacheSettingsStore implements SettingsStore {
 Future<SettingsStore> _defaultSettingsStore() async {
   final prefs = await SharedPreferencesWithCache.create(
     cacheOptions: const SharedPreferencesWithCacheOptions(
-      allowList: {_prefsKey},
+      allowList: {_prefsKey, lastCountryKey},
     ),
   );
   return _WithCacheSettingsStore(prefs);
@@ -412,6 +418,45 @@ class AppSettingsController extends ChangeNotifier {
       // Persistence failure must not break the running app, but it is
       // logged and reported instead of being swallowed.
       _reportError('settings save', error, stackTrace);
+    }
+  }
+
+  /// Last country alpha-2 restored from the independent store key. Null when
+  /// unset or when the stored value was corrupt.
+  String? _lastCountry;
+  String? get lastCountry => _lastCountry;
+
+  static final RegExp _alpha2Pattern = RegExp(r'^[A-Za-z]{2}$');
+
+  /// Read back the country the user last picked. Corrupt values are ignored
+  /// (never surfaced to the UI) and a failed read is reported but never
+  /// throws, so a bad pref can never block globe startup.
+  Future<void> loadLastCountry() async {
+    try {
+      final store = await _storeFactory();
+      final raw = store.getString(lastCountryKey);
+      _lastCountry = raw != null && _alpha2Pattern.hasMatch(raw)
+          ? raw.toUpperCase()
+          : null;
+    } catch (error, stackTrace) {
+      _lastCountry = null;
+      _reportError('last country load', error, stackTrace, isLoad: true);
+    }
+  }
+
+  /// Remember the country the user just picked. Invalid alpha-2 codes and
+  /// the `-99` "no country" sentinel are ignored; a failed write is
+  /// reported but never crashes the picker.
+  Future<void> saveLastCountry(String alpha2) async {
+    final code = alpha2.trim();
+    if (!_alpha2Pattern.hasMatch(code)) return;
+    final normalized = code.toUpperCase();
+    _lastCountry = normalized;
+    try {
+      final store = await _storeFactory();
+      await store.setString(lastCountryKey, normalized);
+    } catch (error, stackTrace) {
+      _reportError('last country save', error, stackTrace);
     }
   }
 

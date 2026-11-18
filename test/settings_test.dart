@@ -123,6 +123,48 @@ void main() {
     expect(reloaded.settings.themeMode, ThemeMode.dark);
   });
 
+  test(
+    'last country round-trips on its own key via the injected store',
+    () async {
+      final store = _FakeSettingsStore();
+      final controller = AppSettingsController(storeFactory: () async => store);
+      await controller.load();
+      await controller.saveLastCountry('jp');
+      expect(controller.lastCountry, 'JP');
+      expect(store.getString(lastCountryKey), 'JP');
+      expect(store.getString('ayatsuri_last_country_v1'), 'JP');
+      // Independent key: the settings JSON document is untouched.
+      expect(store.getString('ayatsuri_settings_v1'), isNull);
+
+      final reloaded = AppSettingsController(storeFactory: () async => store);
+      await reloaded.loadLastCountry();
+      expect(reloaded.lastCountry, 'JP');
+      expect(reloaded.lastLoadError, isNull);
+
+      // Sentinel / malformed input never overwrites a good saved value.
+      await reloaded.saveLastCountry('-99');
+      await reloaded.saveLastCountry('X');
+      await reloaded.saveLastCountry('');
+      expect(store.getString(lastCountryKey), 'JP');
+    },
+  );
+
+  test('corrupt last-country value is ignored without an error', () async {
+    final errors = <Object>[];
+    final store = _FakeSettingsStore({
+      'ayatsuri_last_country_v1': 'not-a-country-code',
+    });
+    final controller = AppSettingsController(
+      storeFactory: () async => store,
+      onPersistenceError: (error, _) => errors.add(error),
+    );
+    await controller.loadLastCountry();
+    expect(controller.lastCountry, isNull);
+    expect(controller.lastLoadError, isNull);
+    expect(errors, isEmpty);
+    expect(controller.settings, const AppSettings());
+  });
+
   testWidgets('settings page renders and persists theme mode change', (
     tester,
   ) async {
@@ -156,7 +198,7 @@ void main() {
 
     await scrollTo('Background');
     await scrollTo('Globe');
-    await scrollTo('Node ping');
+    await scrollTo('Nodes & probe');
     await tester.drag(find.byType(ListView), const Offset(0, 2000));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Dark').first);

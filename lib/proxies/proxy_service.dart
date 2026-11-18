@@ -12,7 +12,8 @@ import 'package:ayatsuri/l10n/app_localizations.dart';
 
 import '../endpoints.dart';
 import 'country_map.dart';
-import 'scheduler_wrapper.dart';
+import 'probe_history.dart';
+import 'smart_selector.dart';
 
 class ProxyItem {
   const ProxyItem({
@@ -60,10 +61,24 @@ class ProxyCandidate {
 }
 
 class ProxySelection {
-  ProxySelection({MihomoAPI? api}) : _api = api ?? MihomoAPI();
+  ProxySelection({MihomoAPI? api, SmartSelector? selector})
+    : _api = api ?? MihomoAPI(),
+      _selector = selector ?? SmartSelector();
 
   final MihomoAPI _api;
-  final SchedulerWrapper _scheduler = SchedulerWrapper();
+  final SmartSelector _selector;
+
+  /// The smart selector (exposed for configuration / diagnostics).
+  SmartSelector get selector => _selector;
+
+  /// Read-only convenience view of the observed probe history.
+  ProbeHistory get history => _selector.history;
+
+  /// Window statistics for one proxy; `null` if never probed.
+  ProbeStats? statsFor(String name) => _selector.statsFor(name);
+
+  /// Non-destructive routing suggestion; does not switch any node.
+  String? bestProxy({String? current}) => _selector.best(current: current);
 
   Map<String, ProxyItem>? _proxies;
   List<GroupItem>? _groups;
@@ -224,20 +239,23 @@ class ProxySelection {
       final delay = (data['delay'] as num?)?.toInt();
       if (delay == null) return false;
       await _updateDelay(name, delay);
-      await _scheduler.updateLatency(name, delay);
+      // Only a real probe result is observed: histories and rankings stay
+      // clean when the controller is unreachable (see the false branch
+      // below), so offline never masquerades as proxy packet loss.
+      await _selector.record(name, delay);
       return true;
     } on DioException catch (e) {
       final status = e.response?.statusCode;
       if (status == 504) {
-        // Probe timed out at the kernel.
+        // Probe timed out at the kernel: record a loss (-1).
         await _updateDelay(name, kDelayTimeout);
-        await _scheduler.updateLatency(name, kDelayTimeout);
+        await _selector.record(name, kDelayTimeout);
         return true;
       }
       if (status == 503) {
-        // Probe ran but the node is unreachable/blocked.
+        // Probe ran but the node is unreachable/blocked: record a loss (0).
         await _updateDelay(name, 0);
-        await _scheduler.updateLatency(name, 0);
+        await _selector.record(name, 0);
         return true;
       }
       // No HTTP response (controller unreachable/offline) or an
