@@ -2,7 +2,7 @@
 
 [![Build Release](https://github.com/lagrange-a1/ayatsuri/actions/workflows/build-release.yml/badge.svg)](https://github.com/lagrange-a1/ayatsuri/actions/workflows/build-release.yml)
 [![pre-commit](https://github.com/lagrange-a1/ayatsuri/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/lagrange-a1/ayatsuri/actions/workflows/pre-commit.yml)
-![version](https://img.shields.io/badge/version-0.1.8-blue)
+![version](https://img.shields.io/badge/version-0.2.0-blue)
 ![Dart](https://img.shields.io/badge/Dart-3.10.7%2B-blue)
 ![Flutter](https://img.shields.io/badge/Flutter-3.38.7-blueviolet)
 
