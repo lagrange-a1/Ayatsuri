@@ -30,6 +30,7 @@ import '../proxies/country_map.dart';
 import '../proxies/country_names.dart';
 import '../proxies/country_shapes.dart';
 import '../proxies/group_label.dart';
+import '../proxies/node_label.dart';
 import '../proxies/proxy_service.dart';
 import '../settings/app_settings.dart';
 import '../platform/test_guard.dart';
@@ -680,7 +681,10 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Text(
-                    l10n.selectedSnack(proxyName, cleanGroupLabel(groupName)),
+                    l10n.selectedSnack(
+                      cleanNodeLabel(proxyName),
+                      cleanGroupLabel(groupName),
+                    ),
                   ),
                   duration: const Duration(seconds: 6),
                   behavior: SnackBarBehavior.floating,
@@ -1165,7 +1169,7 @@ class _CountrySheetState extends State<_CountrySheet> {
     // Merge every visible line into one screen-reader label so a card is
     // not announced as "delay only": name, delay, then window stats.
     final accessibleLabel = <String>[
-      candidate.proxy.name,
+      cleanNodeLabel(candidate.proxy.name),
       delayLabel(l10n, delay),
       if (showStats) 'p95 $p95Part',
       if (showStats) '$availabilityText%',
@@ -1203,13 +1207,16 @@ class _CountrySheetState extends State<_CountrySheet> {
                     ),
                     const SizedBox(width: 6),
                     Expanded(
-                      child: Text(
-                        candidate.proxy.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
+                      child: Tooltip(
+                        message: candidate.proxy.name,
+                        child: Text(
+                          cleanNodeLabel(candidate.proxy.name),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
                     ),

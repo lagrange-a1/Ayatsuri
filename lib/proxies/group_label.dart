@@ -21,7 +21,9 @@ bool _isDecoration(int r) =>
     r == 0x200D || // zero-width joiner
     r == 0x20E3; // combining keycap
 
-String _stripDecorations(String raw) {
+/// Removes emoji and their joiner/modifier characters, replacing each with
+/// a space. Exposed so node and group labels share one normalization rule.
+String stripEmoji(String raw) {
   final buffer = StringBuffer();
   for (final r in raw.runes) {
     if (_isDecoration(r)) {
@@ -42,7 +44,7 @@ final RegExp _runs = RegExp(r'\s+');
 /// the raw text so the group stays distinguishable; it is capped too.
 String cleanGroupLabel(String raw, {int maxChars = kGroupLabelMaxChars}) {
   if (maxChars <= 1) return '…';
-  final flat = _stripDecorations(raw).replaceAll(_runs, ' ').trim();
+  final flat = stripEmoji(raw).replaceAll(_runs, ' ').trim();
   final source = flat.isEmpty ? raw.replaceAll(_runs, ' ').trim() : flat;
   if (source.length <= maxChars) return source;
   return '${source.substring(0, maxChars - 1).trimRight()}…';

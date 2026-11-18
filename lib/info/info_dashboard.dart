@@ -4,6 +4,7 @@ import 'package:re_highlight/re_highlight.dart';
 
 import '../l10n/app_localizations.dart';
 import '../proxies/group_label.dart';
+import '../proxies/node_label.dart';
 import 'json_preview.dart';
 import 'mihomo_info.dart';
 
@@ -427,6 +428,12 @@ class _ProxiesSection extends StatelessWidget {
 /// Proxy types in display order (all types, deterministic).
 List<MapEntry<String, int>> proxiesTopTypes(ProxiesInfo p) => p.sortedTypes;
 
+/// A chain mixes group names and node names. Node names use the "name | CODE n"
+/// convention, so compact them with the node rule; everything else keeps the
+/// group rule. The unmodified chain stays in the Tooltip.
+String _cleanChainPart(String name) =>
+    name.contains('|') ? cleanNodeLabel(name) : cleanGroupLabel(name);
+
 class _GroupsSection extends StatelessWidget {
   const _GroupsSection({required this.summary, required this.raw});
 
@@ -456,7 +463,7 @@ class _GroupsSection extends StatelessWidget {
                   '${g.chainFor(entry.name, proxyNames: proxyNames).join(' → ')}',
               child: Text(
                 '${cleanGroupLabel(entry.name)} (${entry.type}) → '
-                '${g.chainFor(entry.name, proxyNames: proxyNames).map(cleanGroupLabel).join(' → ')}',
+                '${g.chainFor(entry.name, proxyNames: proxyNames).map(_cleanChainPart).join(' → ')}',
                 overflow: TextOverflow.ellipsis,
               ),
             ),
