@@ -20,7 +20,7 @@
 /// `fromStreamBody` factories, which go through [parseJsonLines] and
 /// therefore report `sampleCount`/`max*` across all complete lines.
 /// Live consumption belongs in `MihomoAPI.streamTraffic/streamMemory/
-/// streamLogs` (see `lib/endpoints.dart`), not in a one-shot `GET`.
+/// streamLogs` (see `lib/data/endpoints.dart`), not in a one-shot `GET`.
 library;
 
 import 'dart:convert';

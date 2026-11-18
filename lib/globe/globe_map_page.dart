@@ -679,7 +679,9 @@ class _GlobeMapPageState extends State<GlobeMapPage> {
               final l10n = AppLocalizations.of(context);
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Text(l10n.selectedSnack(proxyName, groupName)),
+                  content: Text(
+                    l10n.selectedSnack(proxyName, cleanGroupLabel(groupName)),
+                  ),
                   duration: const Duration(seconds: 6),
                   behavior: SnackBarBehavior.floating,
                 ),

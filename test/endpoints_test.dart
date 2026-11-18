@@ -1,5 +1,5 @@
 /*
- * Unit tests for `lib/endpoints.dart` audit fixes:
+ * Unit tests for `lib/data/endpoints.dart` audit fixes:
  *  - E3: default secret no longer sends '***' (empty secret = no Bearer)
  *  - E4: path segments are Uri.encodeComponent'd
  *  - E9: PUT /configs sends a {path, payload} body
