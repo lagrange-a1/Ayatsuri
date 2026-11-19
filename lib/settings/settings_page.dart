@@ -51,6 +51,35 @@ String _schemeVariantLabel(
 String _smartLabel(BuildContext context, String zh, String en) =>
     Localizations.localeOf(context).languageCode == 'zh' ? zh : en;
 
+/// Human-readable native-backend status for the settings subtitle. Includes
+/// the actual load failure reason so a permanently-Dart app is explainable.
+String _backendStatusText(BuildContext context) {
+  final status = SchedulerWrapper.rustStatus;
+  final pref = SchedulerWrapper.backendPreference;
+  switch (status) {
+    case RustBackendStatus.initializing:
+      return _smartLabel(context, 'Rust 后端初始化中…', 'Rust backend initializing…');
+    case RustBackendStatus.available:
+      return pref == RoutingBackend.forceDart
+          ? _smartLabel(
+              context,
+              'Rust 已加载，但当前强制使用 Dart',
+              'Rust loaded, but Dart is forced',
+            )
+          : _smartLabel(context, 'Rust 原生内核已加载', 'Rust native core loaded');
+    case RustBackendStatus.unavailable:
+      final raw = SchedulerWrapper.rustError;
+      final reason = raw == null || raw.isEmpty
+          ? _smartLabel(context, '未知原因', 'unknown reason')
+          : (raw.length > 120 ? '${raw.substring(0, 120)}…' : raw);
+      return _smartLabel(
+        context,
+        'Rust 不可用：$reason',
+        'Rust unavailable: $reason',
+      );
+  }
+}
+
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key, required this.controller, this.api});
   final AppSettingsController controller;
@@ -403,10 +432,34 @@ class SettingsPage extends StatelessWidget {
               _header(context, _smartLabel(context, '智能调度', 'Smart routing')),
               ListTile(
                 title: Text(_smartLabel(context, '调度内核', 'Routing core')),
-                subtitle: Text(
-                  SchedulerWrapper().rustActive
-                      ? 'Rust (native)'
-                      : 'Dart (fallback)',
+                subtitle: Text(_backendStatusText(context)),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: SegmentedButton<RoutingBackend>(
+                  segments: [
+                    ButtonSegment(
+                      value: RoutingBackend.rustFirst,
+                      label: Text(
+                        _smartLabel(context, 'Rust 优先', 'Rust first'),
+                      ),
+                      icon: const Icon(Icons.memory),
+                    ),
+                    ButtonSegment(
+                      value: RoutingBackend.forceDart,
+                      label: Text(
+                        _smartLabel(context, '强制 Dart', 'Force Dart'),
+                      ),
+                      icon: const Icon(Icons.code),
+                    ),
+                  ],
+                  selected: {SchedulerWrapper.backendPreference},
+                  onSelectionChanged: (v) {
+                    SchedulerWrapper.setBackendPreference(v.first);
+                    // Rebuild now so the status subtitle reflects the new
+                    // preference. The settings JSON itself is unchanged.
+                    set(s);
+                  },
                 ),
               ),
               SwitchListTile(

@@ -4,10 +4,13 @@
 // backend badge copy, the auto-select commit path (put + adopt), and the
 // opt-in background auto-schedule cycle.
 
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:ayatsuri/data/endpoints.dart';
 import 'package:ayatsuri/info/scheduler_dashboard.dart';
@@ -71,6 +74,32 @@ class FakeMihomoApi extends MihomoAPI {
       Response<Map<String, dynamic>>(
         requestOptions: RequestOptions(),
         data: <String, dynamic>{},
+      ),
+    );
+  }
+}
+
+/// Controller fake whose delay endpoint actually returns numbers, so the real
+/// [ProxySelection.probeByName] path records samples into the scheduler. This
+/// is what turns the dashboard's empty state into a populated ranking.
+class DelayProbeApi extends FakeMihomoApi {
+  DelayProbeApi(this.delays);
+
+  final Map<String, int> delays;
+  final List<String> probed = <String>[];
+
+  @override
+  Future<Response> testProxyDelay(
+    String name, {
+    required String url,
+    int timeout = 5000,
+    String? expected,
+  }) {
+    probed.add(name);
+    return Future<Response>.value(
+      Response<Map<String, dynamic>>(
+        requestOptions: RequestOptions(path: '/proxies/$name/delay'),
+        data: <String, dynamic>{'delay': delays[name] ?? 100},
       ),
     );
   }
@@ -161,6 +190,99 @@ class RecordingAutoSelection extends ProxySelection {
   }
 }
 
+/// Scheduler whose active flag follows the static preference, so a widget
+/// test can observe the chip rebuilding when the preference changes without
+/// needing a real native library.
+class PreferenceAwareScheduler extends SchedulerWrapper {
+  @override
+  bool get rustActive =>
+      SchedulerWrapper.backendPreference == RoutingBackend.rustFirst;
+
+  @override
+  Future<List<NodeRank>> rank(Iterable<String> candidates) async =>
+      const <NodeRank>[];
+}
+
+/// 60-member Selector group: `_probeGroup` must split it into two 50-node
+/// batches instead of awaiting each node serially (P0-3).
+class BigGroupApi extends FakeMihomoApi {
+  BigGroupApi();
+
+  static final List<String> names = List<String>.generate(
+    60,
+    (i) => 'N${i.toString().padLeft(2, '0')}',
+  );
+
+  @override
+  Future<Response> getGroups() => Future<Response>.value(
+    Response<Map<String, dynamic>>(
+      requestOptions: RequestOptions(),
+      data: <String, dynamic>{
+        'proxies': <dynamic>[
+          <String, dynamic>{
+            'name': 'BIG',
+            'type': 'Selector',
+            'all': names,
+            'now': names.first,
+          },
+        ],
+      },
+    ),
+  );
+}
+
+/// Records every group probe; optionally fails one node (first batch) to
+/// prove the rest of the group is still measured.
+class BigGroupSelection extends ProxySelection {
+  BigGroupSelection({
+    required MihomoAPI api,
+    required SmartSelector selector,
+    this.failing,
+  }) : super(api: api, selector: selector);
+
+  final String? failing;
+  final List<String> probes = <String>[];
+
+  @override
+  Future<void> probeByName(
+    String name, {
+    String url = kDefaultProbeUrl,
+    int timeout = kProbeTimeoutMs,
+  }) async {
+    probes.add(name);
+    if (name == failing) throw StateError('probe boom: $name');
+  }
+}
+
+/// Holds each probe behind a gate so a test can count how many probes were
+/// *started* before any completed: batching starts 50 at once, serial probing
+/// starts only one.
+class GatedGroupSelection extends ProxySelection {
+  GatedGroupSelection({required MihomoAPI api, required SmartSelector selector})
+    : super(api: api, selector: selector);
+
+  final List<String> probes = <String>[];
+  final List<Completer<void>> gates = <Completer<void>>[];
+
+  @override
+  Future<void> probeByName(
+    String name, {
+    String url = kDefaultProbeUrl,
+    int timeout = kProbeTimeoutMs,
+  }) async {
+    probes.add(name);
+    final gate = Completer<void>();
+    gates.add(gate);
+    await gate.future;
+  }
+
+  void release() {
+    for (final gate in gates) {
+      if (!gate.isCompleted) gate.complete();
+    }
+  }
+}
+
 Widget _app(ProxySelection selection, {Locale locale = const Locale('en')}) {
   return MaterialApp(
     locale: locale,
@@ -211,6 +333,15 @@ Future<void> _prepare(WidgetTester tester) async {
 }
 
 void main() {
+  // Rust backend state is static; start every test from a known lifecycle.
+  // The backend-preference chip switches also write SharedPreferences; give
+  // the legacy plugin a deterministic in-memory store so tests never depend
+  // on platform-channel availability.
+  setUp(() {
+    SchedulerWrapper.resetForTests();
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+  });
+
   testWidgets(
     'ranking list shows every field and highlights the lowest score',
     (tester) async {
@@ -283,7 +414,7 @@ void main() {
     },
   );
 
-  testWidgets('backend badge follows rustActive in both locales', (
+  testWidgets('backend badge reports real Rust status, not a bare Dart claim', (
     tester,
   ) async {
     await _prepare(tester);
@@ -294,16 +425,44 @@ void main() {
     await tester.pumpWidget(_app(rustSelection));
     await tester.pumpAndSettle();
     expect(find.text('Rust core'), findsOneWidget);
-    expect(find.text('Dart fallback'), findsNothing);
+    expect(find.textContaining('Rust unavailable'), findsNothing);
 
+    // No load attempted yet: the badge shows the real initializing status
+    // instead of an unconditional "Dart fallback".
     final dartSelection = await _loaded(
       FakeMihomoApi(),
       FakeScheduler(rust: false),
     );
     await tester.pumpWidget(_app(dartSelection, locale: const Locale('zh')));
     await tester.pumpAndSettle();
-    expect(find.text('Dart 回退'), findsOneWidget);
-    expect(find.text('Rust 核心'), findsNothing);
+    expect(find.text('Rust 后端初始化中…'), findsOneWidget);
+    expect(find.text('Dart 回退'), findsNothing);
+  });
+
+  testWidgets('backend badge surfaces the native load failure reason', (
+    tester,
+  ) async {
+    await _prepare(tester);
+    final wrapper = SchedulerWrapper();
+    // Drive the real load path: on this host the dylib is absent, so the
+    // public rustStatus flips to unavailable with a readable reason.
+    await wrapper.observe('A', 100);
+    expect(SchedulerWrapper.rustStatus, RustBackendStatus.unavailable);
+
+    final selection = ProxySelection(
+      api: FakeMihomoApi(),
+      selector: SmartSelector(scheduler: wrapper),
+    );
+    await selection.load();
+    await tester.pumpWidget(_app(selection));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Rust unavailable:'), findsOneWidget);
+    expect(find.text('Rust core'), findsNothing);
+
+    await tester.pumpWidget(_app(selection, locale: const Locale('zh')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Rust 不可用：'), findsOneWidget);
   });
 
   testWidgets('auto select commits through select and adopt', (tester) async {
@@ -523,5 +682,158 @@ void main() {
     expect(selection.selector.current, isNull);
     expect(find.textContaining('Auto schedule failed'), findsOneWidget);
     expect(find.byKey(const ValueKey('scheduler-auto-note')), findsOneWidget);
+  });
+
+  testWidgets('empty state explains the gap and offers a group probe', (
+    tester,
+  ) async {
+    await _prepare(tester);
+    final selection = await _loaded(
+      FakeMihomoApi(),
+      FakeScheduler(rows: const <NodeRank>[]),
+    );
+    await tester.pumpWidget(_app(selection));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('scheduler-empty')), findsOneWidget);
+    expect(find.text('No scheduling samples yet'), findsOneWidget);
+    expect(
+      find.text('Probe the current group to build a ranking'),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('scheduler-group-probe')), findsOneWidget);
+    expect(find.text('Probe current group'), findsOneWidget);
+    expect(find.byKey(const ValueKey('scheduler-rank-A')), findsNothing);
+
+    // Bilingual copy: the zh variant still exposes the same probe action.
+    await tester.pumpWidget(_app(selection, locale: const Locale('zh')));
+    await tester.pumpAndSettle();
+    expect(find.text('暂无调度样本'), findsOneWidget);
+    expect(find.text('测速当前组'), findsOneWidget);
+  });
+
+  testWidgets('probing the current group produces samples and ranks', (
+    tester,
+  ) async {
+    await _prepare(tester);
+    final api = DelayProbeApi(<String, int>{'A': 90, 'B': 120, 'C': 60});
+    final wrapper = SchedulerWrapper();
+    final selection = ProxySelection(
+      api: api,
+      selector: SmartSelector(scheduler: wrapper),
+    );
+    await selection.load();
+    await tester.pumpWidget(_app(selection));
+    await tester.pumpAndSettle();
+
+    // Genuinely empty before the tap — no auto-probe on mount.
+    expect(find.byKey(const ValueKey('scheduler-empty')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('scheduler-group-probe')));
+    await tester.pumpAndSettle();
+
+    expect(api.probed.toSet(), <String>{'A', 'B', 'C'});
+    expect(find.byKey(const ValueKey('scheduler-empty')), findsNothing);
+    expect(find.byKey(const ValueKey('scheduler-rank-A')), findsOneWidget);
+    expect(find.byKey(const ValueKey('scheduler-rank-B')), findsOneWidget);
+    expect(find.byKey(const ValueKey('scheduler-rank-C')), findsOneWidget);
+    // C has the smallest delay, so it is the highlighted lowest-score row.
+    expect(find.byKey(const ValueKey('scheduler-lowest-C')), findsOneWidget);
+    // Probing only builds samples here; it must not commit any node.
+    expect(api.selectCalls, isEmpty);
+  });
+
+  testWidgets('backend chip updates immediately when preference switches', (
+    tester,
+  ) async {
+    await _prepare(tester);
+    SchedulerWrapper.resetForTests();
+    final api = FakeMihomoApi();
+    final scheduler = PreferenceAwareScheduler();
+    final selection = ProxySelection(
+      api: api,
+      selector: SmartSelector(scheduler: scheduler),
+    );
+    await selection.load();
+    await tester.pumpWidget(_app(selection));
+    await tester.pumpAndSettle();
+
+    String chipText() => tester
+        .widget<Text>(
+          find
+              .descendant(
+                of: find.byKey(const ValueKey('scheduler-backend')),
+                matching: find.byType(Text),
+              )
+              .first,
+        )
+        .data!;
+
+    expect(chipText(), 'Rust core');
+
+    // No navigation and no manual setState on this page: only the public
+    // notifier can make this chip rebuild (P0-2).
+    await SchedulerWrapper.setBackendPreference(RoutingBackend.forceDart);
+    await tester.pump();
+    expect(chipText(), isNot('Rust core'));
+    expect(chipText(), isNotEmpty);
+
+    await SchedulerWrapper.setBackendPreference(RoutingBackend.rustFirst);
+    await tester.pump();
+    expect(chipText(), 'Rust core');
+    SchedulerWrapper.resetForTests();
+  });
+
+  testWidgets('group probe starts a full 50-node batch concurrently', (
+    tester,
+  ) async {
+    await _prepare(tester);
+    SchedulerWrapper.resetForTests();
+    final api = BigGroupApi();
+    final selection = GatedGroupSelection(
+      api: api,
+      selector: SmartSelector(scheduler: FakeScheduler()),
+    );
+    await selection.load();
+    await tester.pumpWidget(_app(selection));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('scheduler-group-probe')));
+    await tester.pump();
+
+    // 50 probes were started before the first gate completed. A serial
+    // for-loop would have started exactly one by this point (P0-3).
+    expect(selection.probes, hasLength(50));
+    selection.release();
+    await tester.pump();
+    expect(selection.probes, hasLength(60));
+    selection.release();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('scheduler-group-probe')), findsOneWidget);
+  });
+
+  testWidgets('one failing node does not abort the group probe', (
+    tester,
+  ) async {
+    await _prepare(tester);
+    SchedulerWrapper.resetForTests();
+    final api = BigGroupApi();
+    final selection = BigGroupSelection(
+      api: api,
+      selector: SmartSelector(scheduler: FakeScheduler()),
+      failing: BigGroupApi.names.first, // in batch 1
+    );
+    await selection.load();
+    await tester.pumpWidget(_app(selection));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('scheduler-group-probe')));
+    await tester.pumpAndSettle();
+
+    // The old serial loop stopped on the first throw; now every node in
+    // both batches is measured (P0-3).
+    expect(selection.probes, hasLength(60));
+    expect(selection.probes, contains(BigGroupApi.names.last));
+    expect(find.byKey(const ValueKey('scheduler-empty')), findsOneWidget);
   });
 }

@@ -106,6 +106,24 @@ foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})
     COMPONENT Runtime)
 endforeach(bundled_library)
 
+# Bundle the Rust scheduling core built by scripts/build-rust-linux.sh. The
+# executable's rpath is $ORIGIN/lib (set above), so placing the cdylib next to
+# the other bundled libraries makes flutter_rust_bridge's Linux fallback
+# (ExternalLibrary.open('libscheduler.so')) resolve it in a packaged release.
+# Guarded: a pure-Flutter build without the Rust toolchain still succeeds and
+# simply keeps the Dart scheduler fallback.
+set(SCHEDULER_SO
+  "${CMAKE_CURRENT_SOURCE_DIR}/../rust/scheduler/target/release/libscheduler.so")
+if(EXISTS "${SCHEDULER_SO}")
+  install(FILES "${SCHEDULER_SO}"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+else()
+  message(STATUS
+    "Rust scheduler library not found at ${SCHEDULER_SO}; bundle will use the "
+    "Dart fallback. Run scripts/build-rust-linux.sh to enable it.")
+endif()
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/linux/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

@@ -224,6 +224,165 @@ class ThrowingBestSelection extends ProxySelection {
   }
 }
 
+/// Controller with measured, blocked (0), timeout (-1) and unprobed (null)
+/// nodes in one group, to exercise latency ordering and the hide toggle.
+class DelayEdgeApi extends MihomoAPI {
+  DelayEdgeApi() : super(baseUrl: 'http://localhost:9091');
+
+  @override
+  Future<Response> getProxies() => Future<Response>.value(
+    Response<Map<String, dynamic>>(
+      requestOptions: RequestOptions(),
+      data: <String, dynamic>{
+        'proxies': <String, dynamic>{
+          'A-fast': {
+            'name': 'A-fast',
+            'type': 'Direct',
+            'alive': true,
+            'delay': 100,
+          },
+          'B-blocked': {
+            'name': 'B-blocked',
+            'type': 'Direct',
+            'alive': true,
+            'delay': 0,
+          },
+          'C-timeout': {
+            'name': 'C-timeout',
+            'type': 'Direct',
+            'alive': true,
+            'delay': -1,
+          },
+          'D-unknown': {'name': 'D-unknown', 'type': 'Direct', 'alive': true},
+          'E-slow': {
+            'name': 'E-slow',
+            'type': 'Direct',
+            'alive': true,
+            'delay': 900,
+          },
+        },
+      },
+    ),
+  );
+
+  @override
+  Future<Response> getGroups() => Future<Response>.value(
+    Response<Map<String, dynamic>>(
+      requestOptions: RequestOptions(),
+      data: <String, dynamic>{
+        'proxies': <dynamic>[
+          <String, dynamic>{
+            'name': 'EDGE',
+            'type': 'Selector',
+            'all': <String>[
+              'A-fast',
+              'B-blocked',
+              'C-timeout',
+              'D-unknown',
+              'E-slow',
+            ],
+            'now': 'A-fast',
+          },
+        ],
+      },
+    ),
+  );
+}
+
+/// Probe taps are held behind completers so a test can observe the ping
+/// progress state before releasing the batch.
+class GatedProbeSelection extends ProbeRecordingSelection {
+  GatedProbeSelection({required super.api, super.best});
+
+  final List<Completer<void>> gates = <Completer<void>>[];
+
+  @override
+  Future<void> probeByName(
+    String name, {
+    String url = kDefaultProbeUrl,
+    int timeout = kProbeTimeoutMs,
+  }) async {
+    probed.add(name);
+    final completer = Completer<void>();
+    gates.add(completer);
+    await completer.future;
+  }
+
+  void release() {
+    for (final gate in gates) {
+      if (!gate.isCompleted) gate.complete();
+    }
+  }
+}
+
+/// A 60-member Selector group so the whole-group ping has two 50-node
+/// batches. A failure in the first batch must not skip the second (P0-1).
+class BatchProbeApi extends MihomoAPI {
+  BatchProbeApi() : super(baseUrl: 'http://localhost:9091');
+
+  static final List<String> names = List<String>.generate(
+    60,
+    (i) => 'N${i.toString().padLeft(2, '0')}',
+  );
+
+  @override
+  Future<Response> getProxies() => Future<Response>.value(
+    Response<Map<String, dynamic>>(
+      requestOptions: RequestOptions(),
+      data: <String, dynamic>{
+        'proxies': <String, dynamic>{
+          for (final name in names)
+            name: <String, dynamic>{
+              'name': name,
+              'type': 'Direct',
+              'alive': true,
+            },
+        },
+      },
+    ),
+  );
+
+  @override
+  Future<Response> getGroups() => Future<Response>.value(
+    Response<Map<String, dynamic>>(
+      requestOptions: RequestOptions(),
+      data: <String, dynamic>{
+        'proxies': <dynamic>[
+          <String, dynamic>{
+            'name': 'BIG',
+            'type': 'Selector',
+            'all': names,
+            'now': names.first,
+          },
+        ],
+      },
+    ),
+  );
+}
+
+/// Fails one node's probe but still records every call, so a test can assert
+/// the rest of the group (including later batches) was measured.
+class BatchFailingProbeSelection extends ProbeRecordingSelection {
+  BatchFailingProbeSelection({required MihomoAPI api, required this.failing})
+    : super(api: api);
+
+  final String failing;
+
+  @override
+  Future<void> probeByName(
+    String name, {
+    String url = kDefaultProbeUrl,
+    int timeout = kProbeTimeoutMs,
+  }) async {
+    probed.add(name);
+    if (name == failing) throw StateError('probe boom: $name');
+  }
+}
+
+/// Vertical position of a node row, for asserting display order.
+double _topOf(WidgetTester tester, String name) =>
+    tester.getTopLeft(find.byKey(ValueKey('proxy-node-$name'))).dy;
+
 Future<RecordingProxySelection> _pumpPage(
   WidgetTester tester, {
   String? best,
@@ -721,5 +880,181 @@ void main() {
       find.ancestor(of: find.text('Schedule'), matching: find.byType(Tooltip)),
       findsOneWidget,
     );
+  });
+
+  // ── FlClash-style sort / hide / one-click group ping ──────────────────
+
+  testWidgets('sort default preserves controller config order', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await _pumpPage(tester);
+
+    // PROXY group config order is HK 2, CN 1, US 3.
+    expect(_topOf(tester, 'HK 2'), lessThan(_topOf(tester, 'CN 1')));
+    expect(_topOf(tester, 'CN 1'), lessThan(_topOf(tester, 'US 3')));
+  });
+
+  testWidgets('sort by name reorders nodes alphabetically', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await _pumpPage(tester);
+
+    await tester.tap(find.byKey(const ValueKey('proxy-sort-name')));
+    await tester.pumpAndSettle();
+
+    expect(_topOf(tester, 'CN 1'), lessThan(_topOf(tester, 'HK 2')));
+    expect(_topOf(tester, 'HK 2'), lessThan(_topOf(tester, 'US 3')));
+  });
+
+  testWidgets('sort by latency puts measured first and bad nodes last', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = DelayEdgeApi();
+    await _pumpWith(
+      tester,
+      api: api,
+      selection: RecordingProxySelection(api: api),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('proxy-sort-latency')));
+    await tester.pumpAndSettle();
+
+    // Measured nodes first, ascending; null/0/-1 last in config order.
+    expect(_topOf(tester, 'A-fast'), lessThan(_topOf(tester, 'E-slow')));
+    expect(_topOf(tester, 'E-slow'), lessThan(_topOf(tester, 'B-blocked')));
+    expect(_topOf(tester, 'B-blocked'), lessThan(_topOf(tester, 'C-timeout')));
+    expect(_topOf(tester, 'C-timeout'), lessThan(_topOf(tester, 'D-unknown')));
+    // Latency sort never hides a node.
+    for (final name in <String>[
+      'A-fast',
+      'B-blocked',
+      'C-timeout',
+      'D-unknown',
+      'E-slow',
+    ]) {
+      expect(find.byKey(ValueKey('proxy-node-$name')), findsOneWidget);
+    }
+  });
+
+  testWidgets('hide toggle is off by default and explained', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = DelayEdgeApi();
+    await _pumpWith(
+      tester,
+      api: api,
+      selection: RecordingProxySelection(api: api),
+    );
+
+    final sw = tester.widget<Switch>(
+      find.byKey(const ValueKey('proxy-hide-unavailable-switch')),
+    );
+    expect(sw.value, isFalse);
+    // Every node stays visible with the opt-in toggle off.
+    expect(find.byKey(const ValueKey('proxy-node-B-blocked')), findsOneWidget);
+    expect(find.byKey(const ValueKey('proxy-node-C-timeout')), findsOneWidget);
+    // The toggle carries a readable label and explanation.
+    expect(find.text('Hide blocked / timeout'), findsOneWidget);
+    expect(
+      find.ancestor(
+        of: find.byKey(const ValueKey('proxy-hide-unavailable-switch')),
+        matching: find.byType(Tooltip),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('hiding blocked and timeout nodes removes only those nodes', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = DelayEdgeApi();
+    await _pumpWith(
+      tester,
+      api: api,
+      selection: RecordingProxySelection(api: api),
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('proxy-hide-unavailable-switch')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('proxy-node-B-blocked')), findsNothing);
+    expect(find.byKey(const ValueKey('proxy-node-C-timeout')), findsNothing);
+    // Measured nodes and the never-probed (null) node remain.
+    expect(find.byKey(const ValueKey('proxy-node-A-fast')), findsOneWidget);
+    expect(find.byKey(const ValueKey('proxy-node-E-slow')), findsOneWidget);
+    expect(find.byKey(const ValueKey('proxy-node-D-unknown')), findsOneWidget);
+  });
+
+  testWidgets('group ping probes all nodes with progress and recomputes', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = FakeProxyApi();
+    final selection = GatedProbeSelection(api: api);
+    await _pumpWith(tester, api: api, selection: selection);
+
+    expect(selection.probed, isEmpty); // no startup sweep
+    final before = selection.bestCalls;
+
+    await tester.tap(find.byKey(const ValueKey('proxy-group-ping')));
+    await tester.pump();
+
+    // Every member of the current group was probed.
+    expect(selection.probed, unorderedEquals(<String>['HK 2', 'CN 1', 'US 3']));
+    // Progress is shown and repeat taps are de-bounced while in flight.
+    expect(
+      find.byKey(const ValueKey('proxy-group-ping-progress')),
+      findsOneWidget,
+    );
+    final button = tester.widget<IconButton>(
+      find.byKey(const ValueKey('proxy-group-ping')),
+    );
+    expect(button.onPressed, isNull);
+
+    selection.release();
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('proxy-group-ping-progress')),
+      findsNothing,
+    );
+    // The recommendation is refreshed once the batch completes.
+    expect(selection.bestCalls, greaterThan(before));
+  });
+
+  testWidgets('group ping keeps probing later batches after a node fails', (
+    tester,
+  ) async {
+    final api = BatchProbeApi();
+    final selection = BatchFailingProbeSelection(
+      api: api,
+      failing: BatchProbeApi.names.first, // in batch 1 of 2
+    );
+    await _pumpWith(tester, api: api, selection: selection);
+
+    await tester.tap(find.byKey(const ValueKey('proxy-group-ping')));
+    await tester.pumpAndSettle();
+
+    // N59 is in the second batch: with the old Future.wait the first
+    // batch's failure aborted before it was ever probed (P0-1).
+    expect(selection.probed, hasLength(60));
+    expect(selection.probed, contains(BatchProbeApi.names.last));
+    expect(
+      find.byKey(const ValueKey('proxy-group-ping-progress')),
+      findsNothing,
+    );
+    // Ping completes cleanly and the list stays usable.
+    expect(find.byKey(const ValueKey('proxy-best-state')), findsOneWidget);
+    final button = tester.widget<IconButton>(
+      find.byKey(const ValueKey('proxy-group-ping')),
+    );
+    expect(button.onPressed, isNotNull);
   });
 }

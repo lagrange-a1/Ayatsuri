@@ -2,10 +2,13 @@ import 'dart:convert';
 
 import 'package:ayatsuri/settings/app_settings.dart';
 import 'package:ayatsuri/l10n/app_localizations.dart';
+import 'package:ayatsuri/proxies/scheduler_wrapper.dart';
+import 'package:ayatsuri/scheduler/frb_generated.dart';
 import 'package:ayatsuri/settings/settings_page.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// In-memory [SettingsStore] for tests.
 ///
@@ -268,5 +271,150 @@ void main() {
     // Raw enum identifiers were replaced with readable labels.
     expect(find.text('Seed first'), findsAtLeastNWidgets(1));
     expect(find.text('Content'), findsNothing);
+  });
+
+  testWidgets('routing core preference is switchable with a real status line', (
+    tester,
+  ) async {
+    SchedulerWrapper.resetForTests();
+    final controller = AppSettingsController(
+      storeFactory: () async => _FakeSettingsStore(),
+    );
+    await controller.load();
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: const [
+          AppLocalizations.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: SettingsPage(controller: controller),
+      ),
+    );
+
+    // Scroll to the smart-routing section. Same drag technique as the sibling
+    // widget tests: TextFields own extra Scrollables.
+    for (
+      var i = 0;
+      i < 10 && find.text('Routing core').evaluate().isEmpty;
+      i++
+    ) {
+      await tester.drag(find.byType(ListView).first, const Offset(0, -200));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('Routing core'), findsOneWidget);
+    expect(find.byType(SegmentedButton<RoutingBackend>), findsOneWidget);
+    // The subtitle is an honest lifecycle status, not a fabricated badge.
+    expect(find.textContaining('Rust backend'), findsWidgets);
+
+    expect(SchedulerWrapper.backendPreference, RoutingBackend.rustFirst);
+    await tester.tap(find.text('Force Dart'));
+    await tester.pumpAndSettle();
+    expect(SchedulerWrapper.backendPreference, RoutingBackend.forceDart);
+
+    await tester.tap(find.text('Rust first'));
+    await tester.pumpAndSettle();
+    expect(SchedulerWrapper.backendPreference, RoutingBackend.rustFirst);
+    SchedulerWrapper.resetForTests();
+  });
+
+  test('Rust backend failure is observable with a readable reason', () async {
+    SchedulerWrapper.resetForTests();
+    final w = SchedulerWrapper();
+    await w.observe('A', 100);
+    expect(SchedulerWrapper.rustStatus, RustBackendStatus.unavailable);
+    expect(SchedulerWrapper.rustError, contains('has not been initialized'));
+    expect(w.rustActive, isFalse);
+    // The Dart fallback still ranks the sample.
+    final rows = await w.rank(['A']);
+    expect(rows, hasLength(1));
+    expect(rows.single.proxy, 'A');
+    SchedulerWrapper.resetForTests();
+  });
+
+  test('Rust backend really activates and preference can force Dart', () async {
+    SchedulerWrapper.resetForTests();
+    // The cdylib is produced by scripts/build-rust-linux.sh and discovered via
+    // flutter_rust_bridge's ioDirectory (CWD = repo root under flutter test).
+    await RustLib.init();
+    final w = SchedulerWrapper();
+    await w.observe('A', 100);
+    await w.observe('A', 200);
+
+    expect(SchedulerWrapper.rustStatus, RustBackendStatus.available);
+    expect(SchedulerWrapper.rustError, isNull);
+    expect(w.rustActive, isTrue);
+
+    // These numbers come from the native core, not the Dart mirror.
+    final rustRows = await w.rank(['A']);
+    expect(rustRows, hasLength(1));
+    expect(rustRows.single.samples, 2);
+    expect(rustRows.single.ewma, closeTo(120.0, 1e-9));
+
+    // Forcing Dart flips the active backend without losing the samples.
+    SchedulerWrapper.setBackendPreference(RoutingBackend.forceDart);
+    expect(w.rustActive, isFalse);
+    final dartRows = await w.rank(['A']);
+    expect(dartRows, hasLength(1));
+    expect(dartRows.single.ewma, closeTo(120.0, 1e-9));
+
+    // Switching back re-activates Rust immediately, with no reload.
+    SchedulerWrapper.setBackendPreference(RoutingBackend.rustFirst);
+    expect(w.rustActive, isTrue);
+    expect((await w.rank(['A'])).single.samples, 2);
+    SchedulerWrapper.resetForTests();
+  });
+
+  test('backend preference persists across a simulated restart', () async {
+    SchedulerWrapper.resetForTests();
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+
+    expect(SchedulerWrapper.backendPreference, RoutingBackend.rustFirst);
+    await SchedulerWrapper.setBackendPreference(RoutingBackend.forceDart);
+
+    // The value really reached storage — asserted independently of the
+    // in-memory static field.
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString(SchedulerWrapper.backendPreferenceKey), 'forceDart');
+
+    // Simulate a process restart: only the in-memory static state is reset;
+    // the mock store (like disk) keeps the written value.
+    SchedulerWrapper.resetForTests();
+    expect(SchedulerWrapper.backendPreference, RoutingBackend.rustFirst);
+    await SchedulerWrapper.loadBackendPreference();
+    expect(SchedulerWrapper.backendPreference, RoutingBackend.forceDart);
+    expect(
+      SchedulerWrapper.backendPreferenceNotifier.value,
+      RoutingBackend.forceDart,
+    );
+    SchedulerWrapper.resetForTests();
+  });
+
+  test('backend preference notifier fires on set and on reset', () async {
+    SchedulerWrapper.resetForTests();
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final seen = <RoutingBackend>[];
+    void listener() =>
+        seen.add(SchedulerWrapper.backendPreferenceNotifier.value);
+    SchedulerWrapper.backendPreferenceNotifier.addListener(listener);
+    await SchedulerWrapper.setBackendPreference(RoutingBackend.forceDart);
+    SchedulerWrapper.resetForTests();
+    SchedulerWrapper.backendPreferenceNotifier.removeListener(listener);
+    expect(seen, <RoutingBackend>[
+      RoutingBackend.forceDart,
+      RoutingBackend.rustFirst,
+    ]);
+  });
+
+  test('unknown stored backend preference falls back to rustFirst', () async {
+    SchedulerWrapper.resetForTests();
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      SchedulerWrapper.backendPreferenceKey: 'bogus',
+    });
+    await SchedulerWrapper.loadBackendPreference();
+    expect(SchedulerWrapper.backendPreference, RoutingBackend.rustFirst);
+    SchedulerWrapper.resetForTests();
   });
 }

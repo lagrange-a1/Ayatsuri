@@ -1,8 +1,33 @@
 // lib/proxies/scheduler_wrapper.dart
+import 'package:flutter/foundation.dart' show ValueNotifier, debugPrint;
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show Uint64List;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:ayatsuri/scheduler/lib.dart';
+
+/// Which backend the scheduler actually uses for ranking decisions.
+///
+/// [RoutingBackend.rustFirst] is the historical default: use the native core
+/// whenever it loads. [RoutingBackend.forceDart] deliberately keeps the
+/// equivalent Dart twin active even when the library is present, so a user can
+/// opt out of an untrusted/buggy native build without restarting the app.
+enum RoutingBackend { rustFirst, forceDart }
+
+/// Observable lifecycle of the native Rust backend.
+///
+/// Kept independent of [RoutingBackend] so the UI can report *why* Rust is or
+/// is not in use instead of showing a permanently ambiguous badge.
+enum RustBackendStatus {
+  /// No load attempted yet, or a load is currently in flight.
+  initializing,
+
+  /// Library loaded and the bridge is usable.
+  available,
+
+  /// Load failed; [SchedulerWrapper.rustError] carries the readable reason.
+  unavailable,
+}
 
 /// Mutable routing tunables, mirrored 1:1 into Rust's `SchedulerConfig`.
 ///
@@ -162,13 +187,84 @@ class SchedulerWrapper {
   /// only to the Dart mirror while Rust is still loading.
   static Future<void>? _rustInitFuture;
 
+  static RustBackendStatus _rustStatus = RustBackendStatus.initializing;
+  static String? _rustError;
+  static RoutingBackend _backendPreference = RoutingBackend.rustFirst;
+
+  /// Storage key for the persisted routing preference. Kept on its own key
+  /// (outside the big AppSettings JSON document) so this fix never has to
+  /// touch the freezed/json_serializable generated files.
+  static const String backendPreferenceKey = 'ayatsuri_scheduler_backend_v1';
+
+  /// Public listenable mirror of [backendPreference].
+  ///
+  /// The scheduler chip binds to this: switching the preference on the
+  /// settings page notifies it synchronously, so the chip rebuilds on the
+  /// very next frame even when it lives on a different page.
+  static final ValueNotifier<RoutingBackend> backendPreferenceNotifier =
+      ValueNotifier<RoutingBackend>(RoutingBackend.rustFirst);
+
   RoutingConfig _config;
 
+  /// Rust instance actually used for *reads*, honouring the user preference.
+  /// Writes always feed [_rust] too, so switching back to Rust never needs a
+  /// reload and never loses samples recorded while Dart was forced.
+  LatencyScheduler? get _effectiveRust =>
+      _backendPreference == RoutingBackend.forceDart ? null : _rust;
+
   /// True when the native Rust core is the active ranking backend.
-  bool get rustActive => _rust != null;
+  /// Kept as an overridable instance getter so test fakes keep working.
+  bool get rustActive => _effectiveRust != null;
 
   /// True when a native library was looked up (successfully or not).
   static bool get rustAttempted => _rustTried;
+
+  /// Lifecycle of the native library, independent of the user preference.
+  static RustBackendStatus get rustStatus => _rustStatus;
+
+  /// Human-readable reason the native library is unavailable, if any.
+  static String? get rustError => _rustError;
+
+  /// Currently selected backend preference.
+  static RoutingBackend get backendPreference => _backendPreference;
+
+  /// Switch backend at runtime. Both backends stay fed with every sample, so
+  /// this takes effect on the very next rank/best call without a reload.
+  ///
+  /// The notifier is updated **synchronously** (before the first await) so a
+  /// listening UI rebuilds immediately; the write to SharedPreferences is
+  /// asynchronous and best-effort — a storage failure must never break the
+  /// running app.
+  static Future<void> setBackendPreference(RoutingBackend preference) async {
+    _backendPreference = preference;
+    backendPreferenceNotifier.value = preference;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(backendPreferenceKey, preference.name);
+    } catch (e) {
+      debugPrint('[SchedulerWrapper] backend preference save failed: $e');
+    }
+  }
+
+  /// Restore the preference written by [setBackendPreference]. Awaited once
+  /// during startup; a missing, corrupt or unknown value keeps the default
+  /// `rustFirst` so a bad preference can never block app boot.
+  static Future<void> loadBackendPreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(backendPreferenceKey);
+      if (raw == null) return;
+      for (final candidate in RoutingBackend.values) {
+        if (candidate.name == raw) {
+          _backendPreference = candidate;
+          backendPreferenceNotifier.value = candidate;
+          return;
+        }
+      }
+    } catch (e) {
+      debugPrint('[SchedulerWrapper] backend preference load failed: $e');
+    }
+  }
 
   static const double defaultEmaAlpha = 0.2;
   static const int defaultHysteresisMs = 50;
@@ -202,9 +298,16 @@ class SchedulerWrapper {
   Future<void> _loadRust() async {
     try {
       _rust = await LatencyScheduler.newInstance(config: _config.rustConfig);
-    } catch (_) {
+      _rustStatus = RustBackendStatus.available;
+      _rustError = null;
+    } catch (e) {
       // No linked dylib / RustLib.init() never ran / web build without wasm.
+      // Record a readable reason instead of silently swallowing it: the
+      // settings page surfaces this so users are never left guessing.
       _rust = null;
+      _rustStatus = RustBackendStatus.unavailable;
+      _rustError = e.toString();
+      debugPrint('[SchedulerWrapper] Rust backend unavailable: $e');
     }
   }
 
@@ -268,7 +371,7 @@ class SchedulerWrapper {
     await _ensureRust();
     final now = DateTime.now().millisecondsSinceEpoch;
     final ids = candidates.map(proxyId).whereType<int>().toList();
-    final rust = _rust;
+    final rust = _effectiveRust;
     if (rust != null) {
       final rows = await rust.rank(
         candidates: Uint64List.fromList(ids),
@@ -304,7 +407,7 @@ class SchedulerWrapper {
     final now = DateTime.now().millisecondsSinceEpoch;
     final ids = candidates.map(proxyId).whereType<int>().toList();
     final currentId = current == null ? null : _ids[current];
-    final rust = _rust;
+    final rust = _effectiveRust;
     if (rust != null) {
       final picked = await rust.best(
         candidates: Uint64List.fromList(ids),
@@ -392,6 +495,10 @@ class SchedulerWrapper {
     _rust = null;
     _rustTried = false;
     _rustInitFuture = null;
+    _rustStatus = RustBackendStatus.initializing;
+    _rustError = null;
+    _backendPreference = RoutingBackend.rustFirst;
+    backendPreferenceNotifier.value = RoutingBackend.rustFirst;
   }
 
   // ------------------------------------------------------------------------

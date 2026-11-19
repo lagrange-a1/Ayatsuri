@@ -18,6 +18,13 @@
  * SchedulerDashboard that shares this page's ProxySelection, so observations
  * made here are visible to the scheduler and vice versa.
  *
+ * The node view's group header offers FlClash-style controls: a default /
+ * latency / name sort switch, an opt-in toggle that hides blocked (delay 0)
+ * and timeout (delay -1) nodes (off by default so every node stays visible),
+ * and a whole-group ping that probes all members in concurrent batches with
+ * a progress spinner and tap de-bounce. Sorting never hides nodes; both
+ * controls live on this page only, never on the globe page.
+ *
  * All new copy is hand-written bilingual (see `_zh`); no generated l10n keys
  * are added.
  */
@@ -36,6 +43,10 @@ import 'proxy_service.dart';
 /// recommendation badge cannot distinguish "no samples yet" from "current node
 /// is already best", so the page tracks three states instead of one bit.
 enum _BestState { noData, currentIsBest, suggestSwitch }
+
+/// Node ordering for the current group, mirroring FlClash's `ProxiesSortType`
+/// (none / delay / name). View-level only — no new global provider.
+enum _SortMode { defaultOrder, latency, name }
 
 /// A standalone list-style proxy selector.
 ///
@@ -81,6 +92,17 @@ class _ProxyListPageState extends State<ProxyListPage> {
 
   /// false = node list, true = embedded scheduler view.
   bool _showScheduler = false;
+
+  /// Ordering of the current group's rows (default = controller config order).
+  _SortMode _sortMode = _SortMode.defaultOrder;
+
+  /// When true, hide nodes whose last probe reported blocked (delay == 0) or
+  /// timeout (delay == kDelayTimeout). OFF by default so every node stays
+  /// visible, honouring the list's "never hide unreachable nodes" contract.
+  bool _hideUnavailable = false;
+
+  /// Guards the whole-group ping: shows progress and de-bounces repeat taps.
+  bool _groupPinging = false;
 
   /// Nodes whose single-node probe is in flight (shows a spinner, blocks
   /// duplicate taps).
@@ -254,6 +276,89 @@ class _ProxyListPageState extends State<ProxyListPage> {
     await _computeBest(generation);
   }
 
+  /// Sort the current group's rows into the configured order. This never
+  /// removes a node — the opt-in hide toggle is applied separately in
+  /// [_filterNodes]. Real measurements sort first (ascending ms); unprobed
+  /// (null), blocked (0) and timeout (-1) nodes are pushed to the end while
+  /// keeping their original relative order.
+  List<ProxyItem> _sortedNodes(List<ProxyItem> nodes) {
+    switch (_sortMode) {
+      case _SortMode.defaultOrder:
+        return nodes;
+      case _SortMode.name:
+        final sorted = List<ProxyItem>.from(nodes);
+        sorted.sort((a, b) => a.name.compareTo(b.name));
+        return sorted;
+      case _SortMode.latency:
+        final measured = <(int, ProxyItem)>[];
+        final unmeasured = <ProxyItem>[];
+        for (var i = 0; i < nodes.length; i++) {
+          final node = nodes[i];
+          final delay = node.delay;
+          if (delay != null && delay > 0) {
+            measured.add((i, node));
+          } else {
+            unmeasured.add(node);
+          }
+        }
+        measured.sort((a, b) {
+          final byDelay = a.$2.delay!.compareTo(b.$2.delay!);
+          return byDelay != 0 ? byDelay : a.$1.compareTo(b.$1);
+        });
+        return <ProxyItem>[...measured.map((e) => e.$2), ...unmeasured];
+    }
+  }
+
+  /// Remove blocked (delay 0) and timeout (delay -1) nodes only when the
+  /// opt-in toggle is on. Default off keeps every node, including unprobed
+  /// and unreachable ones.
+  List<ProxyItem> _filterNodes(List<ProxyItem> nodes) {
+    if (!_hideUnavailable) return nodes;
+    return nodes.where((node) {
+      final delay = node.delay;
+      return delay != 0 && delay != kDelayTimeout;
+    }).toList();
+  }
+
+  /// Probe one node with its own error boundary. Used by the whole-group ping
+  /// so a single timeout/5xx cannot abort the remaining batch (P0-1).
+  Future<void> _probeOneInGroup(String name) async {
+    try {
+      await _selection.probeByName(name);
+    } catch (_) {
+      // Keep probing the rest of the group; a failed node simply keeps its
+      // previous delay instead of aborting the whole ping operation.
+    }
+  }
+
+  /// Whole-group ping. Batches concurrent probes (FlClash `delayTest` style),
+  /// shows a spinner and de-bounces repeat taps while in flight, then
+  /// refreshes the delay rows and the recommendation. Lives on the node page
+  /// only — never on the globe page.
+  Future<void> _onGroupPing() async {
+    if (_groupPinging) return;
+    final groupName = _currentGroupName;
+    if (groupName == null) return;
+    final nodes = _selection.nodesForGroup(groupName);
+    if (nodes.isEmpty) return;
+    setState(() => _groupPinging = true);
+    final generation = ++_generation;
+    try {
+      const batchSize = 50;
+      for (var i = 0; i < nodes.length; i += batchSize) {
+        final batch = nodes.skip(i).take(batchSize).toList();
+        await Future.wait<void>(
+          batch.map((node) => _probeOneInGroup(node.name)),
+        );
+      }
+    } catch (_) {
+      // A failed probe must not clear the default or break the list.
+    }
+    if (!mounted) return;
+    setState(() => _groupPinging = false);
+    await _computeBest(generation);
+  }
+
   Future<void> _onNodeTap(ProxyItem proxy) async {
     final groupName = _currentGroupName;
     if (groupName == null) return;
@@ -424,6 +529,82 @@ class _ProxyListPageState extends State<ProxyListPage> {
     );
   }
 
+  String _sortLabel(_SortMode mode) {
+    final zh = _zh;
+    return switch (mode) {
+      _SortMode.defaultOrder => zh ? '默认' : 'Default',
+      _SortMode.latency => zh ? '按延迟' : 'Latency',
+      _SortMode.name => zh ? '按名称' : 'Name',
+    };
+  }
+
+  /// Node-page group header: sort switch, opt-in hide toggle with an
+  /// explanation, and a whole-group ping with progress + tap de-bounce.
+  Widget _buildGroupHeader() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 6,
+            children: [
+              for (final mode in _SortMode.values)
+                ChoiceChip(
+                  key: ValueKey('proxy-sort-${mode.name}'),
+                  label: Text(_sortLabel(mode)),
+                  selected: _sortMode == mode,
+                  onSelected: (_) {
+                    if (_sortMode == mode) return;
+                    setState(() => _sortMode = mode);
+                  },
+                ),
+            ],
+          ),
+          Row(
+            children: [
+              Tooltip(
+                message: _zh
+                    ? '开启后隐藏上次测速为「已屏蔽」或「超时」的节点；'
+                          '关闭时（默认）显示所有节点。'
+                    : 'When on, hides nodes whose last probe was blocked or '
+                          'timed out. Off (default) keeps every node visible.',
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Switch(
+                      key: const ValueKey('proxy-hide-unavailable-switch'),
+                      value: _hideUnavailable,
+                      onChanged: (v) => setState(() => _hideUnavailable = v),
+                    ),
+                    Text(_zh ? '隐藏屏蔽/超时节点' : 'Hide blocked / timeout'),
+                  ],
+                ),
+              ),
+              const Spacer(),
+              Tooltip(
+                message: _zh ? '测速当前组全部节点' : 'Probe every node in this group',
+                child: IconButton(
+                  key: const ValueKey('proxy-group-ping'),
+                  tooltip: _zh ? '整组测速' : 'Ping all nodes',
+                  onPressed: _groupPinging ? null : _onGroupPing,
+                  icon: _groupPinging
+                      ? const SizedBox(
+                          key: ValueKey('proxy-group-ping-progress'),
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.network_ping),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildBody() {
     if (_loading) {
       return const Center(
@@ -451,17 +632,31 @@ class _ProxyListPageState extends State<ProxyListPage> {
         child: Text(_zh ? '该组暂无节点' : 'No nodes in this group'),
       );
     }
+    // Sort never hides nodes; the opt-in hide toggle is a separate step.
+    final visibleNodes = _sortedNodes(_filterNodes(nodes));
     final group = groups.firstWhere((g) => g.name == _currentGroupName);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        _buildGroupHeader(),
         _buildBestStatusLine(),
-        Expanded(
-          child: ListView.builder(
-            itemCount: nodes.length,
-            itemBuilder: (context, index) => _buildNodeRow(group, nodes[index]),
+        if (visibleNodes.isEmpty)
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              _zh ? '所有节点已被隐藏' : 'All nodes are hidden',
+              key: const ValueKey('proxy-all-hidden'),
+              textAlign: TextAlign.center,
+            ),
+          )
+        else
+          Expanded(
+            child: ListView.builder(
+              itemCount: visibleNodes.length,
+              itemBuilder: (context, index) =>
+                  _buildNodeRow(group, visibleNodes[index]),
+            ),
           ),
-        ),
       ],
     );
   }

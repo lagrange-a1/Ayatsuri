@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import 'app.dart';
+import 'proxies/scheduler_wrapper.dart';
 import 'scheduler/frb_generated.dart';
 import 'settings/app_settings.dart';
 
@@ -29,13 +30,19 @@ void main() async {
   }
   final settingsController = AppSettingsController();
   await settingsController.load();
+  // Restore the persisted routing backend preference before the first frame,
+  // so the settings page and scheduler chip never flash the wrong value.
+  await SchedulerWrapper.loadBackendPreference();
   // Attach the Rust scheduler when a native library is bundled. A missing
   // dylib (tests, web, older installs) is fine: SchedulerWrapper falls back
   // to its equivalent Dart implementation.
   try {
     await RustLib.init();
-  } catch (_) {
-    // Native backend unavailable; routing keeps working in Dart.
+  } catch (e) {
+    // Native backend unavailable (dylib not built/bundled, web, or a codegen
+    // version mismatch). Keep the equivalent Dart scheduler working, but log
+    // a readable reason instead of failing completely silently.
+    debugPrint('[Ayatsuri] Rust scheduler init failed: $e');
   }
   runApp(MyApp(settingsController: settingsController));
 }

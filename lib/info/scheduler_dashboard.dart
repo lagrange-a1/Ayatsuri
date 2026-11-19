@@ -26,6 +26,34 @@ String _tr(BuildContext context, String zh, String en) =>
 String _ageLabel(int ms) =>
     ms >= 1000 ? '${(ms / 1000).toStringAsFixed(1)}s' : '${ms}ms';
 
+/// Human-readable native-backend status, read from SchedulerWrapper's public
+/// API. The badge must explain *why* the Dart twin is in use instead of
+/// claiming "Dart fallback" unconditionally — on Linux the dylib is often
+/// simply missing, and the concrete load error is the useful information.
+/// Mirrors the settings page's status subtitle so both surfaces agree.
+String _backendStatusText(BuildContext context) {
+  final status = SchedulerWrapper.rustStatus;
+  final pref = SchedulerWrapper.backendPreference;
+  switch (status) {
+    case RustBackendStatus.initializing:
+      return _tr(context, 'Rust 后端初始化中…', 'Rust backend initializing…');
+    case RustBackendStatus.available:
+      return pref == RoutingBackend.forceDart
+          ? _tr(
+              context,
+              'Rust 已加载，但强制使用 Dart',
+              'Rust loaded, but Dart is forced',
+            )
+          : _tr(context, 'Rust 原生内核已加载', 'Rust native core loaded');
+    case RustBackendStatus.unavailable:
+      final raw = SchedulerWrapper.rustError;
+      final reason = raw == null || raw.isEmpty
+          ? _tr(context, '未知原因', 'unknown reason')
+          : (raw.length > 120 ? '${raw.substring(0, 120)}…' : raw);
+      return _tr(context, 'Rust 不可用：$reason', 'Rust unavailable: $reason');
+  }
+}
+
 /// Period of the background auto-scheduling loop.
 ///
 /// One cycle probes every member of the current group, so 60 seconds keeps
@@ -65,6 +93,10 @@ class SchedulerDashboardState extends State<SchedulerDashboard> {
   String? _error;
   bool _ranking = false;
   bool _selecting = false;
+
+  /// Guards the explicit "probe current group" action in the empty state.
+  /// Separate from [_ranking] so a one-tap probe cannot be double-submitted.
+  bool _probing = false;
 
   // ── background auto-scheduling ──────────────────────────────────────────
   /// Default OFF: an IndexStack-resident page must be silent until the user
@@ -174,6 +206,52 @@ class SchedulerDashboardState extends State<SchedulerDashboard> {
     } finally {
       if (mounted) setState(() => _ranking = false);
     }
+  }
+
+  /// Probe one node with its own error boundary. A failed node keeps its
+  /// previous sample and never aborts the rest of the (concurrent) batch.
+  Future<void> _probeOne(String name) async {
+    try {
+      await _selection.probeByName(name);
+    } catch (_) {
+      // Same tolerance as the node page's whole-group ping: one bad node
+      // must not silently stop the group's measurement.
+    }
+  }
+
+  /// Explicit, user-initiated group probe used by the empty state to produce
+  /// the very first samples. Feeds the *shared* [ProxySelection] (the same one
+  /// the auto-schedule loop and auto-select use), so the data lands in the very
+  /// scheduler whose ranks are rendered here. Deliberately does NOT call
+  /// bestProxy/select — committing a node stays an explicit auto-select tap.
+  ///
+  /// Probes in concurrent batches of 50, matching the node page's one-click
+  /// ping: a 100-node group finishes in ~2 batches instead of ~80 serial
+  /// awaits. [_probing] still de-bounces taps and drives the progress spinner.
+  Future<void> _probeGroup() async {
+    final group = _group;
+    if (group == null || _probing) return;
+    if (mounted) {
+      setState(() {
+        _probing = true;
+        _error = null;
+      });
+    }
+    final names = List<String>.from(group.all);
+    try {
+      const batchSize = 50;
+      for (var i = 0; i < names.length; i += batchSize) {
+        final batch = names.skip(i).take(batchSize);
+        await Future.wait<void>(batch.map(_probeOne));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _probing = false);
+    }
+    if (!mounted) return;
+    await _refreshRanks();
   }
 
   void _snack(String message) {
@@ -418,12 +496,59 @@ class SchedulerDashboardState extends State<SchedulerDashboard> {
     );
   }
 
+  /// No samples yet: explain why the table is empty and offer the one action
+  /// that populates it — probing the currently selected Selector group through
+  /// the *shared* selection. Kept compact so it fits the Expanded slot.
+  Widget _emptyState(BuildContext context, bool zh, GroupItem? group) {
+    final canProbe = group != null && !_probing;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              zh ? '暂无调度样本' : 'No scheduling samples yet',
+              key: const ValueKey('scheduler-empty'),
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              zh
+                  ? '测速当前组后将在此显示排名'
+                  : 'Probe the current group to build a ranking',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              key: const ValueKey('scheduler-group-probe'),
+              onPressed: canProbe ? _probeGroup : null,
+              icon: _probing
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.network_check),
+              label: Text(
+                _probing
+                    ? (zh ? '测速中…' : 'Probing…')
+                    : (zh ? '测速当前组' : 'Probe current group'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final zh = _isZh(context);
     final groups = _selection.selectors;
     final group = _group;
-    final rust = _selection.selector.scheduler.rustActive;
     final lowest = _ranks.isEmpty
         ? null
         : _ranks.map((r) => r.score).reduce(min);
@@ -440,17 +565,37 @@ class SchedulerDashboardState extends State<SchedulerDashboard> {
               children: [
                 Row(
                   children: [
-                    Chip(
-                      key: const ValueKey('scheduler-backend'),
-                      avatar: Icon(
-                        rust ? Icons.bolt : Icons.healing_outlined,
-                        size: 18,
-                      ),
-                      label: Text(
-                        rust
-                            ? (zh ? 'Rust 核心' : 'Rust core')
-                            : (zh ? 'Dart 回退' : 'Dart fallback'),
-                      ),
+                    // Bind to the public notifier so switching the backend
+                    // preference on the settings page rebuilds this chip
+                    // immediately, even though this widget lives on another
+                    // page and has no setState of its own (P0-2).
+                    ValueListenableBuilder<RoutingBackend>(
+                      valueListenable:
+                          SchedulerWrapper.backendPreferenceNotifier,
+                      builder: (context, _, _) {
+                        final rust = _selection.selector.scheduler.rustActive;
+                        return Chip(
+                          key: const ValueKey('scheduler-backend'),
+                          avatar: Icon(
+                            rust ? Icons.bolt : Icons.healing_outlined,
+                            size: 18,
+                          ),
+                          label: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 240),
+                            child: Text(
+                              // When Rust is genuinely active, name it.
+                              // Otherwise show the real status/reason from
+                              // the public API, which also reflects the
+                              // forced-Dart preference.
+                              rust
+                                  ? (zh ? 'Rust 核心' : 'Rust core')
+                                  : _backendStatusText(context),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        );
+                      },
                     ),
                     const Spacer(),
                     IconButton(
@@ -572,7 +717,7 @@ class SchedulerDashboardState extends State<SchedulerDashboard> {
           child: _ranking
               ? const Center(child: CircularProgressIndicator())
               : _ranks.isEmpty
-              ? Center(child: Text(zh ? '暂无调度样本' : 'No scheduling samples yet'))
+              ? _emptyState(context, zh, group)
               : ListView.builder(
                   padding: const EdgeInsets.only(bottom: 12),
                   itemCount: _ranks.length,
