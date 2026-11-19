@@ -4,9 +4,17 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'data/endpoints.dart';
 import 'globe/globe_map_page.dart';
 import 'info/info_page.dart';
+import 'info/scheduler_dashboard.dart';
 import 'l10n/app_localizations.dart';
+import 'proxies/proxy_list_page.dart';
 import 'settings/app_settings.dart';
 import 'settings/settings_page.dart';
+
+/// Nav labels for tabs that have no generated l10n key yet. Follows the
+/// repo's hand-written bilingual pattern (see settings_page.dart) so the
+/// generated l10n files stay untouched.
+bool _navZh(BuildContext context) =>
+    Localizations.localeOf(context).languageCode == 'zh';
 
 class MyApp extends StatelessWidget {
   MyApp({super.key, AppSettingsController? settingsController})
@@ -101,22 +109,37 @@ class _MihomoAppState extends State<MihomoApp> {
     super.dispose();
   }
 
-  /// The globe page is the home tab; both pages auto-fetch controller state
-  /// when they are first built (startup), so the visible page is fresh.
+  /// Globe stays the home tab; every data page is keyed by the connection
+  /// identity so switching endpoints rebuilds it (and refetches). Tabs in
+  /// order: globe, nodes, schedule, info, settings.
   List<Widget> get pages => [
     GlobeMapPage(
       key: ValueKey('globe$_connKey'),
       api: _api,
       settingsController: widget.settingsController,
     ),
+    ProxyListPage(key: ValueKey('nodes$_connKey'), api: _api),
+    SchedulerDashboard(key: ValueKey('schedule$_connKey'), api: _api),
     MihomoInfo(key: ValueKey('info$_connKey'), api: _api),
-    SettingsPage(controller: widget.settingsController, api: _api),
+    SettingsPage(
+      key: ValueKey('settings$_connKey'),
+      controller: widget.settingsController,
+      api: _api,
+    ),
   ];
 
-  List<BottomNavigationBarItem> items(AppLocalizations l10n) => [
+  List<BottomNavigationBarItem> items(AppLocalizations l10n, bool zh) => [
     BottomNavigationBarItem(
       icon: const Icon(Icons.public, size: 28),
       label: l10n.navGlobe,
+    ),
+    BottomNavigationBarItem(
+      icon: const Icon(Icons.dns, size: 28),
+      label: zh ? '节点' : 'Nodes',
+    ),
+    BottomNavigationBarItem(
+      icon: const Icon(Icons.schedule, size: 28),
+      label: zh ? '调度' : 'Schedule',
     ),
     BottomNavigationBarItem(
       icon: const Icon(Icons.info, size: 28),
@@ -135,7 +158,7 @@ class _MihomoAppState extends State<MihomoApp> {
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _index,
         onTap: (i) => setState(() => _index = i),
-        items: items(AppLocalizations.of(context)),
+        items: items(AppLocalizations.of(context), _navZh(context)),
         type: BottomNavigationBarType.fixed,
       ),
     );

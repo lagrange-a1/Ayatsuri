@@ -14,6 +14,10 @@ import 'package:ayatsuri/l10n/app_localizations.dart';
 import 'package:ayatsuri/proxies/proxy_service.dart';
 
 class FakeMihomoAPI extends MihomoAPI {
+  /// Records `(group, proxy)` for every PUT the service issues, so tests can
+  /// verify `select`/`selectAny` reach the API regardless of group type.
+  final List<(String, String)> selectCalls = <(String, String)>[];
+
   Map<String, Map<String, dynamic>> mockProxies =
       <String, Map<String, dynamic>>{
         'HK 2': {'name': 'HK 2', 'type': 'Direct', 'alive': true, 'delay': 150},
@@ -67,7 +71,13 @@ class FakeMihomoAPI extends MihomoAPI {
 
   @override
   Future<Response> selectProxy(String name, {required String proxyName}) {
-    mockGroups[0]['now'] = proxyName;
+    selectCalls.add((name, proxyName));
+    for (final group in mockGroups) {
+      if (group['name'] == name) {
+        group['now'] = proxyName;
+        break;
+      }
+    }
     return Future<Response>.value(
       Response<Map<String, dynamic>>(
         requestOptions: RequestOptions(),
@@ -199,6 +209,83 @@ void main() async {
     expect(selection.selectors[0].now, 'CN 1');
     final updated = selection.candidatesForMapId('CN');
     expect(updated.first.isNow, isTrue);
+  });
+
+  test(
+    'allGroups includes Selector and automatic groups in config order',
+    () async {
+      fake.mockGroups = <Map<String, dynamic>>[
+        {
+          // Deliberately listed before the Selector in controller order.
+          'name': 'auto-b',
+          'type': 'URLTest',
+          'all': ['HK 2'],
+          'now': 'HK 2',
+        },
+        {
+          'name': 'sel-a',
+          'type': 'Selector',
+          'all': ['CN 1'],
+          'now': 'CN 1',
+        },
+        {
+          'name': 'GLOBAL',
+          'type': 'Selector',
+          'all': ['sel-a', 'auto-b', 'GLOBAL'],
+          'now': 'DIRECT',
+        },
+      ];
+      await selection.load();
+      final all = selection.allGroups;
+      // Both types survive, ordered by the aggregate group's config order.
+      expect(all.map((g) => g.name).toList(), ['sel-a', 'auto-b', 'GLOBAL']);
+      expect(all.map((g) => g.type), contains('URLTest'));
+      // `selectors` still filters out the URLTest group, unchanged.
+      expect(selection.selectors.map((g) => g.name).toList(), [
+        'sel-a',
+        'GLOBAL',
+      ]);
+      final auto = all.firstWhere((g) => g.name == 'auto-b');
+      expect(auto.isAuto, isTrue);
+      expect(auto.isSelector, isFalse);
+      expect(auto.typeLabel, 'AUTO');
+      final manual = all.firstWhere((g) => g.name == 'sel-a');
+      expect(manual.isAuto, isFalse);
+      expect(manual.typeLabel, 'SELECT');
+    },
+  );
+
+  test(
+    'nodesForGroup returns members in all-order, skipping missing',
+    () async {
+      await selection.load();
+      fake.mockGroups[0]['all'] = ['US 3', 'MISSING', 'CN 1', 'HK 2'];
+      await selection.load();
+      final nodes = selection.nodesForGroup('go');
+      expect(nodes.map((p) => p.name).toList(), ['US 3', 'CN 1', 'HK 2']);
+      expect(nodes.map((p) => p.type).toList(), ['Direct', 'Direct', 'Direct']);
+      expect(selection.nodesForGroup('does-not-exist'), isEmpty);
+    },
+  );
+
+  test('selectAny issues PUT for any group type via selectProxy', () async {
+    await selection.load();
+    // A manual Selector: same path as `select`.
+    await selection.selectAny('go', 'US 3');
+    expect(fake.selectCalls, contains(('go', 'US 3')));
+    await selection.load();
+    expect(selection.selectors.first.now, 'US 3');
+
+    // An automatic URLTest group: the kernel may reject it, but the data
+    // layer still attempts the PUT — verify the call reaches the API.
+    fake.mockGroups.add(<String, dynamic>{
+      'name': 'auto',
+      'type': 'URLTest',
+      'all': ['HK 2'],
+      'now': 'HK 2',
+    });
+    await selection.selectAny('auto', 'CN 1');
+    expect(fake.selectCalls, contains(('auto', 'CN 1')));
   });
 
   test('delay labels', () {

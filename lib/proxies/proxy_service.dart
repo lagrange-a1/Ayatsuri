@@ -51,6 +51,24 @@ class GroupItem {
   /// Only `Selector` accepts that call; `URLTest`/`Fallback` use `fixed`
   /// + `DELETE` to clear and `LoadBalance` has no `now` to pin.
   bool get isSelector => type == 'Selector';
+
+  /// Any non-Selector group: an automatic pool (`URLTest`/`Fallback`/
+  /// `LoadBalance`/...) whose member is chosen by the kernel rather than
+  /// pinned by the user.
+  bool get isAuto => !isSelector;
+
+  /// Short display tag for the group's policy type, suitable for a small
+  /// UI chip. Unknown kernel types fall back to the uppercased raw value.
+  String get typeLabel => switch (type) {
+    'Selector' => 'SELECT',
+    'URLTest' => 'AUTO',
+    'Fallback' => 'FALLBACK',
+    'LoadBalance' => 'BALANCE',
+    'Direct' => 'DIRECT',
+    'Reject' => 'REJECT',
+    '' => 'UNKNOWN',
+    final t => t.toUpperCase(),
+  };
 }
 
 class ProxyCandidate {
@@ -107,8 +125,22 @@ class ProxySelection {
   /// first appearance there. Groups missing from that list keep their
   /// relative controller order after the ranked ones. Without an
   /// aggregate group the controller order is used as-is.
-  List<GroupItem> get selectors {
-    final list = (_groups ?? []).where((group) => group.isSelector).toList();
+  List<GroupItem> get selectors =>
+      _inConfigOrder((_groups ?? []).where((group) => group.isSelector));
+
+  /// Every group — manual `Selector`s *and* automatic pools (`URLTest`/
+  /// `Fallback`/`LoadBalance`/...) — in config order.
+  ///
+  /// Uses the exact same ordering as [selectors] so the two views line up;
+  /// the only difference is that automatic groups are no longer filtered
+  /// out. This is what lets the node picker show a group that has no
+  /// user-pinnable `now` but still holds a useful set of members.
+  List<GroupItem> get allGroups => _inConfigOrder(_groups ?? <GroupItem>[]);
+
+  /// Order [source] by the aggregate group's config-order rank, keeping
+  /// the incoming relative order for ties and for unranked groups.
+  List<GroupItem> _inConfigOrder(Iterable<GroupItem> source) {
+    final list = source.toList();
     final rank = _groupRank;
     if (rank == null) return list;
     final indexed = list.indexed.toList()
@@ -214,6 +246,39 @@ class ProxySelection {
   /// Set a specific node inside a policy group.
   Future<void> select(String groupName, String proxyName) =>
       _api.selectProxy(groupName, proxyName: proxyName);
+
+  /// Try to pin [proxyName] inside [group] regardless of the group's policy
+  /// type — intended for the settings "dev / advanced" console, where the
+  /// user may deliberately probe what a group accepts.
+  ///
+  /// This always issues `PUT /proxies/<group>`. Only `Selector` groups are
+  /// guaranteed to honour it; the kernel may **reject** the call for
+  /// `URLTest`/`Fallback`/`LoadBalance` groups (e.g. HTTP 400/404, or a
+  /// successful response that silently keeps the automatic selection).
+  /// Callers must treat a thrown [DioException] as an expected outcome for
+  /// automatic groups, not as a controller failure.
+  Future<void> selectAny(String group, String proxyName) =>
+      _api.selectProxy(group, proxyName: proxyName);
+
+  /// All proxies that are members of [groupName], in the group's `all`
+  /// order. Names that are not in the last `/proxies` snapshot are skipped
+  /// so a stale config can never yield a hole; an unknown group is empty.
+  List<ProxyItem> nodesForGroup(String groupName) {
+    GroupItem? group;
+    for (final g in _groups ?? <GroupItem>[]) {
+      if (g.name == groupName) {
+        group = g;
+        break;
+      }
+    }
+    if (group == null) return const <ProxyItem>[];
+    final out = <ProxyItem>[];
+    for (final name in group.all) {
+      final proxy = proxies[name];
+      if (proxy != null) out.add(proxy);
+    }
+    return out;
+  }
 
   static int? _lastHistoryDelay(Map<String, dynamic> n) {
     final history = n['history'] as List<dynamic>?;
