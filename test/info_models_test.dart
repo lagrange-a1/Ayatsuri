@@ -88,7 +88,7 @@ void main() {
           'name': 'DIRECT',
           'type': 'Direct',
           'alive': true,
-          'history': [],
+          'history': <dynamic>[],
         },
         'HK 1': {
           'name': 'HK 1',
@@ -113,7 +113,7 @@ void main() {
           'alive': true,
           'now': 'HK 1',
           'all': ['DIRECT', 'HK 1'],
-          'history': [],
+          'history': <dynamic>[],
         },
       },
     };
@@ -151,7 +151,7 @@ void main() {
           'alive': true,
           'now': 'HK 1',
           'all': ['HK 1', 'US 1'],
-          'history': [],
+          'history': <dynamic>[],
         },
         {
           'name': 'top',
@@ -159,7 +159,7 @@ void main() {
           'alive': true,
           'now': 'leaf-group',
           'all': ['leaf-group'],
-          'history': [],
+          'history': <dynamic>[],
         },
         {
           'name': 'auto',
@@ -353,10 +353,10 @@ void main() {
       final summary = MihomoInfoSummary.fromAll(
         version: {'version': '1.19.33', 'meta': true},
         configs: {'mode': 'rule'},
-        proxies: {'proxies': {}},
-        group: {'proxies': []},
-        rules: {'rules': []},
-        connections: {'connections': []},
+        proxies: <String, dynamic>{'proxies': <String, dynamic>{}},
+        group: <String, dynamic>{'proxies': <dynamic>[]},
+        rules: <String, dynamic>{'rules': <dynamic>[]},
+        connections: <String, dynamic>{'connections': <dynamic>[]},
         traffic: {'up': 1, 'down': 2, 'upTotal': 3, 'downTotal': 4},
         memory: {'inuse': 5, 'oslimit': 0},
         logs: {'type': 'info', 'payload': 'x'},

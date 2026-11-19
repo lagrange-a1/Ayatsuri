@@ -41,7 +41,7 @@ class FakeMihomoApi extends MihomoAPI {
   ];
 
   @override
-  Future<Response> getProxies() => Future<Response>.value(
+  Future<Response<dynamic>> getProxies() => Future<Response<dynamic>>.value(
     Response<Map<String, dynamic>>(
       requestOptions: RequestOptions(),
       data: <String, dynamic>{
@@ -58,7 +58,7 @@ class FakeMihomoApi extends MihomoAPI {
   );
 
   @override
-  Future<Response> getGroups() => Future<Response>.value(
+  Future<Response<dynamic>> getGroups() => Future<Response<dynamic>>.value(
     Response<Map<String, dynamic>>(
       requestOptions: RequestOptions(),
       data: <String, dynamic>{'proxies': groups},
@@ -66,12 +66,15 @@ class FakeMihomoApi extends MihomoAPI {
   );
 
   @override
-  Future<Response> selectProxy(String name, {required String proxyName}) {
+  Future<Response<dynamic>> selectProxy(
+    String name, {
+    required String proxyName,
+  }) {
     selectCalls.add((name, proxyName));
     for (final group in groups) {
       if (group['name'] == name) group['now'] = proxyName;
     }
-    return Future<Response>.value(
+    return Future<Response<dynamic>>.value(
       Response<Map<String, dynamic>>(
         requestOptions: RequestOptions(),
         data: <String, dynamic>{},
@@ -90,14 +93,14 @@ class DelayProbeApi extends FakeMihomoApi {
   final List<String> probed = <String>[];
 
   @override
-  Future<Response> testProxyDelay(
+  Future<Response<dynamic>> testProxyDelay(
     String name, {
     required String url,
     int timeout = 5000,
     String? expected,
   }) {
     probed.add(name);
-    return Future<Response>.value(
+    return Future<Response<dynamic>>.value(
       Response<Map<String, dynamic>>(
         requestOptions: RequestOptions(path: '/proxies/$name/delay'),
         data: <String, dynamic>{'delay': delays[name] ?? 100},
@@ -177,7 +180,7 @@ class RecordingAutoSelection extends ProxySelection {
     int timeout = kProbeTimeoutMs,
   }) async {
     probes.add(name);
-    if (probeFailure != null) throw probeFailure!;
+    if (probeFailure != null) throw StateError(probeFailure.toString());
   }
 
   @override
@@ -215,7 +218,7 @@ class BigGroupApi extends FakeMihomoApi {
   );
 
   @override
-  Future<Response> getGroups() => Future<Response>.value(
+  Future<Response<dynamic>> getGroups() => Future<Response<dynamic>>.value(
     Response<Map<String, dynamic>>(
       requestOptions: RequestOptions(),
       data: <String, dynamic>{

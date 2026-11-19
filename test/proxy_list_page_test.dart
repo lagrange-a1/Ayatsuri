@@ -53,7 +53,7 @@ class FakeProxyApi extends MihomoAPI {
   ];
 
   @override
-  Future<Response> getProxies() => Future<Response>.value(
+  Future<Response<dynamic>> getProxies() => Future<Response<dynamic>>.value(
     Response<Map<String, dynamic>>(
       requestOptions: RequestOptions(),
       data: <String, dynamic>{'proxies': _proxies},
@@ -61,7 +61,7 @@ class FakeProxyApi extends MihomoAPI {
   );
 
   @override
-  Future<Response> getGroups() => Future<Response>.value(
+  Future<Response<dynamic>> getGroups() => Future<Response<dynamic>>.value(
     Response<Map<String, dynamic>>(
       requestOptions: RequestOptions(),
       data: <String, dynamic>{'proxies': _groups},
@@ -69,9 +69,12 @@ class FakeProxyApi extends MihomoAPI {
   );
 
   @override
-  Future<Response> selectProxy(String name, {required String proxyName}) {
+  Future<Response<dynamic>> selectProxy(
+    String name, {
+    required String proxyName,
+  }) {
     if (failSelect) {
-      return Future<Response>.error(
+      return Future<Response<dynamic>>.error(
         DioException(
           requestOptions: RequestOptions(path: '/proxies/$name'),
           type: DioExceptionType.badResponse,
@@ -83,7 +86,7 @@ class FakeProxyApi extends MihomoAPI {
         ),
       );
     }
-    return Future<Response>.value(
+    return Future<Response<dynamic>>.value(
       Response<Map<String, dynamic>>(
         requestOptions: RequestOptions(),
         data: <String, dynamic>{},
@@ -153,8 +156,7 @@ class RaceProxySelection extends ProxySelection {
 /// Records single-node probe taps without issuing HTTP: the page must call
 /// probeByName for the tapped node and then recompute the recommendation.
 class ProbeRecordingSelection extends RecordingProxySelection {
-  ProbeRecordingSelection({required MihomoAPI api, String? best})
-    : super(api: api, best: best);
+  ProbeRecordingSelection({required super.api, super.best});
 
   final List<String> probed = <String>[];
 
@@ -172,7 +174,7 @@ class ProbeRecordingSelection extends RecordingProxySelection {
 /// group's `now` is hidden until the third load, so the page's bounded poll
 /// must resolve it instead of leaving the recommendation empty.
 class LateNowSelection extends RecordingProxySelection {
-  LateNowSelection({required MihomoAPI api}) : super(api: api);
+  LateNowSelection({required super.api});
 
   int loads = 0;
 
@@ -197,7 +199,7 @@ class LateNowSelection extends RecordingProxySelection {
 /// A controller whose `now` is never published: the bounded poll must exhaust
 /// and surface a visible "unavailable" status instead of failing silently.
 class NeverNowSelection extends RecordingProxySelection {
-  NeverNowSelection({required MihomoAPI api}) : super(api: api);
+  NeverNowSelection({required super.api});
 
   int loads = 0;
 
@@ -230,7 +232,7 @@ class DelayEdgeApi extends MihomoAPI {
   DelayEdgeApi() : super(baseUrl: 'http://localhost:9091');
 
   @override
-  Future<Response> getProxies() => Future<Response>.value(
+  Future<Response<dynamic>> getProxies() => Future<Response<dynamic>>.value(
     Response<Map<String, dynamic>>(
       requestOptions: RequestOptions(),
       data: <String, dynamic>{
@@ -266,7 +268,7 @@ class DelayEdgeApi extends MihomoAPI {
   );
 
   @override
-  Future<Response> getGroups() => Future<Response>.value(
+  Future<Response<dynamic>> getGroups() => Future<Response<dynamic>>.value(
     Response<Map<String, dynamic>>(
       requestOptions: RequestOptions(),
       data: <String, dynamic>{
@@ -326,7 +328,7 @@ class BatchProbeApi extends MihomoAPI {
   );
 
   @override
-  Future<Response> getProxies() => Future<Response>.value(
+  Future<Response<dynamic>> getProxies() => Future<Response<dynamic>>.value(
     Response<Map<String, dynamic>>(
       requestOptions: RequestOptions(),
       data: <String, dynamic>{
@@ -343,7 +345,7 @@ class BatchProbeApi extends MihomoAPI {
   );
 
   @override
-  Future<Response> getGroups() => Future<Response>.value(
+  Future<Response<dynamic>> getGroups() => Future<Response<dynamic>>.value(
     Response<Map<String, dynamic>>(
       requestOptions: RequestOptions(),
       data: <String, dynamic>{
@@ -363,8 +365,7 @@ class BatchProbeApi extends MihomoAPI {
 /// Fails one node's probe but still records every call, so a test can assert
 /// the rest of the group (including later batches) was measured.
 class BatchFailingProbeSelection extends ProbeRecordingSelection {
-  BatchFailingProbeSelection({required MihomoAPI api, required this.failing})
-    : super(api: api);
+  BatchFailingProbeSelection({required super.api, required this.failing});
 
   final String failing;
 

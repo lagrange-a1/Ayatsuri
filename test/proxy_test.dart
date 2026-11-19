@@ -62,7 +62,7 @@ class FakeMihomoAPI extends MihomoAPI {
   ];
 
   @override
-  Future<Response> getProxies() => Future<Response>.value(
+  Future<Response<dynamic>> getProxies() => Future<Response<dynamic>>.value(
     Response<Map<String, dynamic>>(
       requestOptions: RequestOptions(),
       data: <String, dynamic>{'proxies': mockProxies},
@@ -70,7 +70,7 @@ class FakeMihomoAPI extends MihomoAPI {
   );
 
   @override
-  Future<Response> getGroups() => Future<Response>.value(
+  Future<Response<dynamic>> getGroups() => Future<Response<dynamic>>.value(
     Response<Map<String, dynamic>>(
       requestOptions: RequestOptions(),
       data: <String, dynamic>{'proxies': mockGroups},
@@ -78,7 +78,7 @@ class FakeMihomoAPI extends MihomoAPI {
   );
 
   @override
-  Future<Response> testProxyDelay(
+  Future<Response<dynamic>> testProxyDelay(
     String name, {
     String url = kDefaultProbeUrl,
     int timeout = 5000,
@@ -86,7 +86,7 @@ class FakeMihomoAPI extends MihomoAPI {
   }) {
     final item = mockProxies[name] ?? <String, dynamic>{};
     final mockDelay = item['delay'] as int?;
-    return Future<Response>.value(
+    return Future<Response<dynamic>>.value(
       Response<Map<String, dynamic>>(
         requestOptions: RequestOptions(),
         data: mockDelay != null
@@ -97,7 +97,10 @@ class FakeMihomoAPI extends MihomoAPI {
   }
 
   @override
-  Future<Response> selectProxy(String name, {required String proxyName}) {
+  Future<Response<dynamic>> selectProxy(
+    String name, {
+    required String proxyName,
+  }) {
     selectCalls.add((name, proxyName));
     for (final group in mockGroups) {
       if (group['name'] == name) {
@@ -105,7 +108,7 @@ class FakeMihomoAPI extends MihomoAPI {
         break;
       }
     }
-    return Future<Response>.value(
+    return Future<Response<dynamic>>.value(
       Response<Map<String, dynamic>>(
         requestOptions: RequestOptions(),
         data: <String, dynamic>{},
@@ -114,12 +117,13 @@ class FakeMihomoAPI extends MihomoAPI {
   }
 
   @override
-  Future<Response> getProxy(String name) => Future<Response>.value(
-    Response<Map<String, dynamic>>(
-      requestOptions: RequestOptions(),
-      data: mockProxies[name] ?? {},
-    ),
-  );
+  Future<Response<dynamic>> getProxy(String name) =>
+      Future<Response<dynamic>>.value(
+        Response<Map<String, dynamic>>(
+          requestOptions: RequestOptions(),
+          data: mockProxies[name] ?? {},
+        ),
+      );
 }
 
 void main() async {
@@ -206,7 +210,7 @@ void main() async {
     await selection.load();
     // US 3 has no probe key, so the delay is not set.
     final updated = await fake.testProxyDelay('US 3');
-    expect(updated.data['delay'], isNull);
+    expect((updated.data as Map<String, dynamic>)['delay'], isNull);
     await selection.probeByName('US 3');
     expect(selection.proxies['US 3']!.delay, isNull);
   });

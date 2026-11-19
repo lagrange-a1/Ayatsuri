@@ -205,7 +205,9 @@ class ProxySelection {
   String? _fatalError;
 
   Future<void> _loadProxies() async {
-    final response = await retryTransient<Response?>(() => _api.getProxies());
+    final response = await retryTransient<Response<dynamic>?>(
+      () => _api.getProxies(),
+    );
     if (response == null) {
       // No response after retries: controller unreachable (offline), not
       // an empty proxy set. Surface this so the globe can show offline.
@@ -232,7 +234,9 @@ class ProxySelection {
   }
 
   Future<void> _loadGroups() async {
-    final response = await retryTransient<Response?>(() => _api.getGroups());
+    final response = await retryTransient<Response<dynamic>?>(
+      () => _api.getGroups(),
+    );
     if (response == null) {
       _fatalError ??= 'Proxy service unreachable: no response (offline?)';
       return;

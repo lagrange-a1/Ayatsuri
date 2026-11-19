@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart' show Response;
 import 'package:flutter/material.dart';
 
 import '../data/endpoints.dart';
@@ -70,7 +71,12 @@ class _MihomoInfoState extends State<MihomoInfo> {
     // (fetch, assign) pairs — one table instead of nine near-identical
     // closures.
     final fetchers =
-        <(Future<dynamic> Function(), void Function(Map<String, dynamic>))>[
+        <
+          (
+            Future<Response<dynamic>> Function(),
+            void Function(Map<String, dynamic>),
+          )
+        >[
           (_api.getVersion, (d) => _version = d),
           (_api.getConfigs, (d) => _configs = d),
           (_api.getProxies, (d) => _proxies = d),
@@ -86,7 +92,10 @@ class _MihomoInfoState extends State<MihomoInfo> {
     for (final (fetch, assign) in fetchers) {
       retryTransient(fetch)
           .then((r) {
-            if (r != null) assign(r.data as Map<String, dynamic>);
+            if (r != null) {
+              final Object? data = r.data;
+              if (data is Map<String, dynamic>) assign(data);
+            }
           })
           .catchError((Object e) {
             // Non-transient failure: remember the first one; the error

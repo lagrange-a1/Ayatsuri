@@ -35,11 +35,12 @@ import 'package:flutter/material.dart';
 
 import 'package:ayatsuri/data/endpoints.dart';
 import 'package:ayatsuri/info/scheduler_dashboard.dart';
-import 'package:ayatsuri/l10n/app_localizations.dart';
 
-import 'node_label.dart';
 import 'proxy_service.dart';
 import 'scheduler_wrapper.dart';
+import 'widgets/group_selector_bar.dart';
+import 'widgets/proxy_node_row.dart';
+import 'widgets/recommendation_banner.dart';
 
 /// Recommendation status shown as explicit text in the node view. A single
 /// recommendation badge cannot distinguish "no samples yet" from "current node
@@ -442,58 +443,12 @@ class _ProxyListPageState extends State<ProxyListPage> {
       children: [
         // ── Groups: every group, including auto pools ──────────────────
         _buildSectionLabel('分组', 'Groups'),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final group in _selection.allGroups)
-                ChoiceChip(
-                  key: ValueKey('proxy-group-${group.name}'),
-                  label: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(group.name),
-                      if (group.isAuto)
-                        Container(
-                          key: ValueKey('proxy-auto-badge-${group.name}'),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 1,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.tertiaryContainer,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            _zh ? '自动' : 'AUTO',
-                            style: Theme.of(context).textTheme.labelSmall,
-                          ),
-                        ),
-                    ],
-                  ),
-                  selected: group.name == _currentGroupName,
-                  onSelected: (_) => _onGroupChanged(group.name),
-                ),
-            ],
-          ),
+        GroupSelectorBar(
+          groups: _selection.allGroups,
+          currentGroupName: _currentGroupName,
+          zh: _zh,
+          onGroupChanged: _onGroupChanged,
         ),
-        // ── Auto-route explanation: always visible, never tooltip-only ────
-        if (_selection.allGroups.any((g) => g.isAuto))
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-            child: Text(
-              _zh
-                  ? '部分组由内核自动选路，手动选择可能无效'
-                  : 'Some groups are auto-routed by the kernel; manual picks may not apply',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
         // ── View: segmented switch + force-select debug control ────────
         _buildSectionLabel('视图', 'View'),
         Padding(
@@ -767,212 +722,25 @@ class _ProxyListPageState extends State<ProxyListPage> {
         final target = _best ?? '-';
         state = _zh ? '切换至 $target' : 'Switch to $target';
     }
-    final textTheme = Theme.of(context).textTheme;
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(
-                _zh ? '建议' : 'Recommendation',
-                style: textTheme.labelLarge?.copyWith(
-                  color: scheme.primary,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                state,
-                key: const ValueKey('proxy-best-state'),
-                style: textTheme.bodySmall,
-              ),
-            ],
-          ),
-          if (_pollFailed)
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                _zh
-                    ? '当前节点状态暂不可用（获取超时）'
-                    : 'Current node unavailable (poll timed out)',
-                key: const ValueKey('proxy-poll-timeout'),
-                style: textTheme.bodySmall?.copyWith(color: scheme.error),
-              ),
-            ),
-          // ── Technical basis: separate register, same page ─────────────
-          if (_bestRank != null && _bestState == _BestState.suggestSwitch)
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                _zh
-                    ? '延迟 ${_bestRank!.ewma.toStringAsFixed(0)}ms  │  '
-                          '抖动 ${_bestRank!.jitter.toStringAsFixed(0)}ms  │  '
-                          '失败 ${_bestRank!.failures} 次'
-                    : 'Latency ${_bestRank!.ewma.toStringAsFixed(0)}ms  │  '
-                          'Jitter ${_bestRank!.jitter.toStringAsFixed(0)}ms  │  '
-                          'Failures ${_bestRank!.failures}',
-                key: const ValueKey('proxy-best-technical'),
-                style: textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-        ],
-      ),
+    return RecommendationBanner(
+      state: state,
+      pollFailed: _pollFailed,
+      bestRank: _bestRank,
+      isSuggestSwitch: _bestState == _BestState.suggestSwitch,
+      zh: _zh,
     );
   }
 
   Widget _buildNodeRow(GroupItem group, ProxyItem proxy) {
-    final l10n = AppLocalizations.of(context);
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    final isNow = group.now == proxy.name;
-    final isRecommended = _best == proxy.name && !isNow;
-    // Auto-group members are only tappable in force mode; Selector members
-    // are always tappable. Neither hides unreachable nodes.
-    final canTap = !group.isAuto || _devMode;
-    final probing = _probing.contains(proxy.name);
-
-    return Card(
-      key: ValueKey('proxy-node-${proxy.name}'),
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      color: isNow ? scheme.primaryContainer : null,
-      surfaceTintColor: Colors.transparent,
-      elevation: isNow ? 2 : 1,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: isNow
-            ? BorderSide(color: scheme.primary, width: 2)
-            : BorderSide(color: scheme.outlineVariant),
-      ),
-      child: InkWell(
-        onTap: canTap ? () => _onNodeTap(proxy) : null,
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              // Status dot is colored by the last probe result.
-              Container(
-                key: ValueKey('proxy-delay-dot-${proxy.name}'),
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                  color: delayColor(proxy.delay),
-                  shape: BoxShape.circle,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            cleanNodeLabel(proxy.name),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: textTheme.titleMedium,
-                          ),
-                        ),
-                        if (isRecommended)
-                          Container(
-                            key: ValueKey('proxy-recommended-${proxy.name}'),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 7,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: scheme.primaryContainer,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              _zh ? '推荐' : 'Recommended',
-                              style: textTheme.labelSmall?.copyWith(
-                                color: scheme.onPrimaryContainer,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 5),
-                    Row(
-                      children: [
-                        // Group policy tag, e.g. SELECT / AUTO / FALLBACK.
-                        Container(
-                          key: ValueKey('proxy-type-${proxy.name}'),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 1,
-                          ),
-                          decoration: BoxDecoration(
-                            color: scheme.secondaryContainer,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            group.typeLabel,
-                            style: textTheme.labelSmall?.copyWith(
-                              color: scheme.onSecondaryContainer,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        // Single test control: the delay label itself. The
-                        // status dot at the left is the only colour-coded
-                        // latency affordance, so no second icon is needed.
-                        Tooltip(
-                          message: _zh ? '点击测速该节点' : 'Tap to test this node',
-                          child: InkWell(
-                            key: ValueKey('proxy-delay-${proxy.name}'),
-                            onTap: canTap ? () => _onProbeTap(proxy) : null,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 4,
-                                vertical: 2,
-                              ),
-                              child: probing
-                                  ? const SizedBox(
-                                      width: 13,
-                                      height: 13,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    )
-                                  : Text(
-                                      delayLabel(l10n, proxy.delay),
-                                      style: textTheme.labelMedium?.copyWith(
-                                        color: scheme.onSurface,
-                                        fontWeight: FontWeight.w600,
-                                        decoration: TextDecoration.underline,
-                                      ),
-                                    ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              if (isNow)
-                Padding(
-                  padding: const EdgeInsets.only(left: 8),
-                  child: Icon(
-                    Icons.check_circle,
-                    key: ValueKey('proxy-current-${proxy.name}'),
-                    color: scheme.primary,
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
+    return ProxyNodeRow(
+      group: group,
+      proxy: proxy,
+      best: _best,
+      devMode: _devMode,
+      probing: _probing.contains(proxy.name),
+      zh: _zh,
+      onNodeTap: () => _onNodeTap(proxy),
+      onProbeTap: () => _onProbeTap(proxy),
     );
   }
 }

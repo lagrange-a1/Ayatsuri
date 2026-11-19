@@ -33,7 +33,7 @@ void main() {
       'name': 'x',
     };
     final code = await prettyJsonInBackground(data);
-    expect(jsonDecode(code)['list'], [1, 2, 3]);
+    expect((jsonDecode(code) as Map<String, dynamic>)['list'], [1, 2, 3]);
     expect(code.contains('\n  "list"'), isTrue);
   });
 }

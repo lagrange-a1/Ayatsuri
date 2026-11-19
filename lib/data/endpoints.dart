@@ -134,7 +134,7 @@ Future<T> retryTransientOrThrow<T>(
       if (!isTransientDioError(e)) rethrow;
       lastError = e;
       if (i == attempts - 1) break;
-      await Future.delayed(interval);
+      await Future<void>.delayed(interval);
     }
   }
   // Attempts exhausted on transient failures: surface the real error.
@@ -254,7 +254,11 @@ class MihomoAPI {
   ///
   /// [path] is relative to the controller base URL; absolute URLs are
   /// rejected so a typo cannot turn the console into a generic HTTP client.
-  Future<Response> requestRaw(String method, String path, {Object? data}) {
+  Future<Response<dynamic>> requestRaw(
+    String method,
+    String path, {
+    Object? data,
+  }) {
     final m = method.trim().toUpperCase();
     var p = path.trim();
     if (p.isEmpty) p = '/';
@@ -288,27 +292,32 @@ class MihomoAPI {
   // ── Version ──────────────────────────────────────────────────────────
 
   /// `GET /version`
-  Future<Response> getVersion() => _dio.get('/version');
+  Future<Response<dynamic>> getVersion() => _dio.get('/version');
 
   // ── Proxies ──────────────────────────────────────────────────────────
 
   /// `GET /proxies`
-  Future<Response> getProxies() => _dio.get('/proxies');
+  Future<Response<dynamic>> getProxies() => _dio.get('/proxies');
 
   /// `GET /proxies/<name>`
-  Future<Response> getProxy(String name) =>
+  Future<Response<dynamic>> getProxy(String name) =>
       _dio.get('/proxies/${encodePathSegment(name)}');
 
   /// `PUT /proxies/<name>` — select a proxy within a policy group.
-  Future<Response> selectProxy(String name, {required String proxyName}) => _dio
-      .put('/proxies/${encodePathSegment(name)}', data: {'name': proxyName});
+  Future<Response<dynamic>> selectProxy(
+    String name, {
+    required String proxyName,
+  }) => _dio.put(
+    '/proxies/${encodePathSegment(name)}',
+    data: {'name': proxyName},
+  );
 
   /// `DELETE /proxies/<name>` — clear fixed selection (except Selector type).
-  Future<Response> clearProxySelection(String name) =>
+  Future<Response<dynamic>> clearProxySelection(String name) =>
       _dio.delete('/proxies/${encodePathSegment(name)}');
 
   /// `GET /<prefix>/<name>/delay` — probe the delay of a proxy or group.
-  Future<Response> _delay(
+  Future<Response<dynamic>> _delay(
     String prefix,
     String name, {
     required String url,
@@ -324,7 +333,7 @@ class MihomoAPI {
   }
 
   /// `GET /proxies/<name>/delay`
-  Future<Response> testProxyDelay(
+  Future<Response<dynamic>> testProxyDelay(
     String name, {
     required String url,
     int timeout = 5000,
@@ -335,14 +344,14 @@ class MihomoAPI {
   // ── Policy Groups ────────────────────────────────────────────────────
 
   /// `GET /group`
-  Future<Response> getGroups() => _dio.get('/group');
+  Future<Response<dynamic>> getGroups() => _dio.get('/group');
 
   /// `GET /group/<name>`
-  Future<Response> getGroup(String name) =>
+  Future<Response<dynamic>> getGroup(String name) =>
       _dio.get('/group/${encodePathSegment(name)}');
 
   /// `GET /group/<name>/delay`
-  Future<Response> testGroupDelay(
+  Future<Response<dynamic>> testGroupDelay(
     String name, {
     required String url,
     int timeout = 5000,
@@ -352,14 +361,14 @@ class MihomoAPI {
   // ── Running Configuration ────────────────────────────────────────────
 
   /// `GET /configs`
-  Future<Response> getConfigs() => _dio.get('/configs');
+  Future<Response<dynamic>> getConfigs() => _dio.get('/configs');
 
   /// `PUT /configs` — reload basic configuration.
   ///
   /// The kernel decodes a `{path, payload}` JSON body
   /// (`hub/route/configs.go:updateConfigs`); an empty body is a 400.
   /// `path`/`payload` default to the documented `""` reload values.
-  Future<Response> reloadConfigs({
+  Future<Response<dynamic>> reloadConfigs({
     bool force = false,
     String path = '',
     String payload = '',
@@ -370,11 +379,11 @@ class MihomoAPI {
   );
 
   /// `PATCH /configs` — update a single configuration field.
-  Future<Response> updateConfig(Map<String, dynamic> config) =>
+  Future<Response<dynamic>> updateConfig(Map<String, dynamic> config) =>
       _dio.patch('/configs', data: config);
 
   /// `POST /configs/geo` — update the GEO database.
-  Future<Response> updateGeoDatabase({
+  Future<Response<dynamic>> updateGeoDatabase({
     required String path,
     required String payload,
   }) => _dio.post('/configs/geo', data: {'path': path, 'payload': payload});
@@ -382,52 +391,55 @@ class MihomoAPI {
   // ── Cache ────────────────────────────────────────────────────────────
 
   /// `POST /cache/fakeip/flush`
-  Future<Response> flushFakeIPCache() => _dio.post('/cache/fakeip/flush');
+  Future<Response<dynamic>> flushFakeIPCache() =>
+      _dio.post('/cache/fakeip/flush');
 
   /// `POST /cache/dns/flush`
-  Future<Response> flushDNSCache() => _dio.post('/cache/dns/flush');
+  Future<Response<dynamic>> flushDNSCache() => _dio.post('/cache/dns/flush');
 
   // ── Connections ──────────────────────────────────────────────────────
 
   /// `GET /connections`
-  Future<Response> getConnections({int interval = 1000}) =>
+  Future<Response<dynamic>> getConnections({int interval = 1000}) =>
       _dio.get('/connections', queryParameters: {'interval': interval});
 
   /// `DELETE /connections` — close all connections.
-  Future<Response> closeAllConnections() => _dio.delete('/connections');
+  Future<Response<dynamic>> closeAllConnections() =>
+      _dio.delete('/connections');
 
   /// `DELETE /connections/<id>` — close a specific connection.
-  Future<Response> closeConnection(String id) =>
+  Future<Response<dynamic>> closeConnection(String id) =>
       _dio.delete('/connections/${encodePathSegment(id)}');
 
   // ── Rules ────────────────────────────────────────────────────────────
 
   /// `GET /rules`
-  Future<Response> getRules() => _dio.get('/rules');
+  Future<Response<dynamic>> getRules() => _dio.get('/rules');
 
   /// `PATCH /rules/disable` — disable rules by index.
-  Future<Response> disableRules(Map<String, bool> ruleStates) =>
+  Future<Response<dynamic>> disableRules(Map<String, bool> ruleStates) =>
       _dio.patch('/rules/disable', data: ruleStates);
 
   // ── Proxy Providers ──────────────────────────────────────────────────
 
   /// `GET /providers/proxies`
-  Future<Response> getProxyProviders() => _dio.get('/providers/proxies');
+  Future<Response<dynamic>> getProxyProviders() =>
+      _dio.get('/providers/proxies');
 
   /// `GET /providers/proxies/<name>`
-  Future<Response> getProxyProvider(String name) =>
+  Future<Response<dynamic>> getProxyProvider(String name) =>
       _dio.get('/providers/proxies/${encodePathSegment(name)}');
 
   /// `PUT /providers/proxies/<name>`
-  Future<Response> updateProxyProvider(String name) =>
+  Future<Response<dynamic>> updateProxyProvider(String name) =>
       _dio.put('/providers/proxies/${encodePathSegment(name)}');
 
   /// `GET /providers/proxies/<name>/healthcheck`
-  Future<Response> healthCheckProxyProvider(String name) =>
+  Future<Response<dynamic>> healthCheckProxyProvider(String name) =>
       _dio.get('/providers/proxies/${encodePathSegment(name)}/healthcheck');
 
   /// `GET /providers/proxies/<name>/proxies/<proxy_name>`
-  Future<Response> getProxyFromProvider(
+  Future<Response<dynamic>> getProxyFromProvider(
     String providerName,
     String proxyName,
   ) => _dio.get(
@@ -435,7 +447,7 @@ class MihomoAPI {
   );
 
   /// `GET /providers/proxies/<name>/proxies/<proxy_name>/healthcheck`
-  Future<Response> healthCheckProxyFromProvider(
+  Future<Response<dynamic>> healthCheckProxyFromProvider(
     String providerName,
     String proxyName, {
     String? url,
@@ -452,10 +464,10 @@ class MihomoAPI {
   // ── Rule Providers ───────────────────────────────────────────────────
 
   /// `GET /providers/rules`
-  Future<Response> getRuleProviders() => _dio.get('/providers/rules');
+  Future<Response<dynamic>> getRuleProviders() => _dio.get('/providers/rules');
 
   /// `PUT /providers/rules/<name>`
-  Future<Response> updateRuleProvider(String name) =>
+  Future<Response<dynamic>> updateRuleProvider(String name) =>
       _dio.put('/providers/rules/${encodePathSegment(name)}');
 
   // ── Traffic / Memory / Logs (streaming) ─────────────────────────────
@@ -484,15 +496,15 @@ class MihomoAPI {
 
   /// `GET /traffic` — one-shot snapshot only; see the streaming note
   /// above. Use [streamTraffic] for live ticks.
-  Future<Response> getTraffic() =>
+  Future<Response<dynamic>> getTraffic() =>
       _dio.get('/traffic', options: _snapshotOptions());
 
   /// `GET /memory` — one-shot snapshot only; see [getTraffic].
-  Future<Response> getMemory() =>
+  Future<Response<dynamic>> getMemory() =>
       _dio.get('/memory', options: _snapshotOptions());
 
   /// `GET /logs` — one-shot snapshot only; see [getTraffic].
-  Future<Response> getLogs({
+  Future<Response<dynamic>> getLogs({
     String level = 'info',
     String format = 'standard',
   }) => _dio.get(
@@ -544,31 +556,35 @@ class MihomoAPI {
   // ── DNS ──────────────────────────────────────────────────────────────
 
   /// `GET /dns/query`
-  Future<Response> queryDNS({required String name, required String type}) =>
-      _dio.get('/dns/query', queryParameters: {'name': name, 'type': type});
+  Future<Response<dynamic>> queryDNS({
+    required String name,
+    required String type,
+  }) => _dio.get('/dns/query', queryParameters: {'name': name, 'type': type});
 
   // ── Storage ──────────────────────────────────────────────────────────
 
   /// `GET /storage/<key>`
-  Future<Response> getStorage(String key) =>
+  Future<Response<dynamic>> getStorage(String key) =>
       _dio.get('/storage/${encodePathSegment(key)}');
 
   /// `PUT /storage/<key>` — write a JSON value (max 1 MB).
-  Future<Response> setStorage(String key, Map<String, dynamic> value) =>
-      _dio.put('/storage/${encodePathSegment(key)}', data: value);
+  Future<Response<dynamic>> setStorage(
+    String key,
+    Map<String, dynamic> value,
+  ) => _dio.put('/storage/${encodePathSegment(key)}', data: value);
 
   /// `DELETE /storage/<key>`
-  Future<Response> deleteStorage(String key) =>
+  Future<Response<dynamic>> deleteStorage(String key) =>
       _dio.delete('/storage/${encodePathSegment(key)}');
 
   // ── Restart / Upgrade ────────────────────────────────────────────────
 
   /// `POST /restart`
-  Future<Response> restart({String path = '', String payload = ''}) =>
+  Future<Response<dynamic>> restart({String path = '', String payload = ''}) =>
       _dio.post('/restart', data: {'path': path, 'payload': payload});
 
   /// `POST /upgrade`
-  Future<Response> upgrade({
+  Future<Response<dynamic>> upgrade({
     String channel = '',
     bool force = false,
     String path = '',
@@ -580,18 +596,20 @@ class MihomoAPI {
   );
 
   /// `POST /upgrade/ui`
-  Future<Response> upgradeUI() => _dio.post('/upgrade/ui');
+  Future<Response<dynamic>> upgradeUI() => _dio.post('/upgrade/ui');
 
   /// `POST /upgrade/geo`
-  Future<Response> upgradeGeo({String path = '', String payload = ''}) =>
-      _dio.post('/upgrade/geo', data: {'path': path, 'payload': payload});
+  Future<Response<dynamic>> upgradeGeo({
+    String path = '',
+    String payload = '',
+  }) => _dio.post('/upgrade/geo', data: {'path': path, 'payload': payload});
 
   // ── DEBUG ────────────────────────────────────────────────────────────
 
   /// `PUT /debug/gc` (requires `debug` log level on the controller).
-  Future<Response> garbageCollect() => _dio.put('/debug/gc');
+  Future<Response<dynamic>> garbageCollect() => _dio.put('/debug/gc');
 
   /// `GET /debug/pprof` — raw pprof profile (not JSON; requires `debug`
   /// log level). Consume `response.data` as bytes/text, not a Map.
-  Future<Response> getPprof() => _dio.get('/debug/pprof');
+  Future<Response<dynamic>> getPprof() => _dio.get('/debug/pprof');
 }
