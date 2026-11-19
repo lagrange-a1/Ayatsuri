@@ -12,6 +12,31 @@ import 'package:ayatsuri/data/endpoints.dart';
 import 'package:ayatsuri/proxies/country_map.dart';
 import 'package:ayatsuri/l10n/app_localizations.dart';
 import 'package:ayatsuri/proxies/proxy_service.dart';
+import 'package:ayatsuri/proxies/scheduler_wrapper.dart';
+import 'package:ayatsuri/proxies/smart_selector.dart';
+
+class RecordingScheduler extends SchedulerWrapper {
+  Iterable<String>? lastCandidates;
+
+  @override
+  Future<List<NodeRank>> rank(Iterable<String> candidates) async {
+    lastCandidates = candidates;
+    return const <NodeRank>[];
+  }
+}
+
+class RecordingSelector extends SmartSelector {
+  RecordingSelector(SchedulerWrapper scheduler) : super(scheduler: scheduler);
+
+  Iterable<String>? bestCandidates;
+
+  @override
+  Future<String?> best({Iterable<String>? candidates, String? current}) async {
+    bestCandidates = candidates;
+    if (candidates == null || candidates.isEmpty) return null;
+    return candidates.first;
+  }
+}
 
 class FakeMihomoAPI extends MihomoAPI {
   /// Records `(group, proxy)` for every PUT the service issues, so tests can
@@ -357,5 +382,21 @@ void main() async {
     );
     expect(kernelCountryAlpha2([grp('A', 'Selector', 'DIRECT')]), isNull);
     expect(kernelCountryAlpha2([]), isNull);
+  });
+
+  test('scheduling never considers DIRECT', () async {
+    final scheduler = RecordingScheduler();
+    final recording = RecordingSelector(scheduler);
+    final selection = ProxySelection(api: fake, selector: recording);
+
+    final best = await selection.bestProxy(
+      candidates: const ['DIRECT', 'HK 2', 'direct', 'CN 1'],
+      current: 'HK 2',
+    );
+    expect(best, 'HK 2');
+    expect(recording.bestCandidates, ['HK 2', 'CN 1']);
+
+    await selection.rankProxies(const ['DIRECT', 'HK 2']);
+    expect(scheduler.lastCandidates, ['HK 2']);
   });
 }

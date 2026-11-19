@@ -96,13 +96,25 @@ class ProxySelection {
   /// Window statistics for one proxy; `null` if never probed.
   ProbeStats? statsFor(String name) => _selector.statsFor(name);
 
+  /// NON-routable node names that must never enter scheduling: `DIRECT`
+  /// bypasses the proxy entirely, so its probe latency can look attractive
+  /// while providing no proxying at all.
+  static bool _ignoredByScheduler(String name) =>
+      name.toUpperCase() == 'DIRECT';
+
+  /// Scheduler candidates with DIRECT removed.
+  Iterable<String> _routable(Iterable<String>? candidates) =>
+      (candidates ?? _selector.scheduler.knownProxies).where(
+        (name) => !_ignoredByScheduler(name),
+      );
+
   /// Non-destructive routing suggestion; does not switch any node.
   Future<String?> bestProxy({Iterable<String>? candidates, String? current}) =>
-      _selector.best(candidates: candidates, current: current);
+      _selector.best(candidates: _routable(candidates), current: current);
 
   /// Full Rust/Dart ranking for the given candidates, best first.
   Future<List<NodeRank>> rankProxies(Iterable<String> candidates) =>
-      _selector.scheduler.rank(candidates);
+      _selector.scheduler.rank(_routable(candidates));
 
   Map<String, ProxyItem>? _proxies;
   List<GroupItem>? _groups;
