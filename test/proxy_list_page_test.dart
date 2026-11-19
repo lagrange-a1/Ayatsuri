@@ -555,10 +555,20 @@ void main() {
     expect(find.byKey(const ValueKey('proxy-type-HK 2')), findsOneWidget);
     expect(find.byKey(const ValueKey('proxy-delay-HK 2')), findsOneWidget);
     expect(find.text('Force-select auto groups'), findsOneWidget);
+    // The auto badge is a plain, always-visible chip: no Tooltip wrapper
+    // (N3: remove the duplicate, don't relocate it), and the auto-route
+    // constraint is explained in always-visible text (N5: visible before
+    // interaction), not inside a hover-only tooltip.
     expect(
       find.ancestor(
         of: find.byKey(const ValueKey('proxy-auto-badge-AUTO-POOL')),
         matching: find.byType(Tooltip),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.text(
+        'Some groups are auto-routed by the kernel; manual picks may not apply',
       ),
       findsOneWidget,
     );

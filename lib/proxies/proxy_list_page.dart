@@ -39,6 +39,7 @@ import 'package:ayatsuri/l10n/app_localizations.dart';
 
 import 'node_label.dart';
 import 'proxy_service.dart';
+import 'scheduler_wrapper.dart';
 
 /// Recommendation status shown as explicit text in the node view. A single
 /// recommendation badge cannot distinguish "no samples yet" from "current node
@@ -86,6 +87,12 @@ class _ProxyListPageState extends State<ProxyListPage> {
   /// Explicit tri-state backing the text status line in the node view, so
   /// "no data" and "current node is best" are not conflated behind one badge.
   _BestState _bestState = _BestState.noData;
+
+  /// Technical basis for the current recommendation: the [NodeRank] of the
+  /// suggested node, so the recommendation area can show *why* a node is
+  /// recommended without forcing the user to switch to the scheduler page.
+  /// Null when no rank data is available (no samples, or suggestion == current).
+  NodeRank? _bestRank;
 
   /// Set when the bounded poll exhausts without ever resolving `now`; shown
   /// as a short visible status line instead of failing silently.
@@ -239,6 +246,25 @@ class _ProxyListPageState extends State<ProxyListPage> {
       _bestState = _BestState.noData;
     } else {
       _bestState = _BestState.currentIsBest;
+    }
+    // Surface the technical basis alongside the human conclusion so the
+    // recommendation area can show *why* a node is recommended (N4: separate
+    // registers, same page). Fetching is best-effort: a failed rank call
+    // leaves _bestRank null and the human line still renders.
+    if (suggestion != null && suggestion.isNotEmpty) {
+      try {
+        final ranks = await _selection.rankProxies(candidates);
+        for (final r in ranks) {
+          if (r.proxy == suggestion) {
+            _bestRank = r;
+            break;
+          }
+        }
+      } catch (_) {
+        // A failed rank call must not clear the recommendation.
+      }
+    } else {
+      _bestRank = null;
     }
     setState(() {});
   }
@@ -430,28 +456,21 @@ class _ProxyListPageState extends State<ProxyListPage> {
                     children: [
                       Text(group.name),
                       if (group.isAuto)
-                        Tooltip(
-                          message: _zh
-                              ? '自动组由内核选择节点，手动选择通常会被忽略；开启下方开关可强制尝试'
-                              : 'Auto groups pick their node in the kernel; '
-                                    'manual picks are normally ignored. Use the '
-                                    'switch below to force an attempt.',
-                          child: Container(
-                            key: ValueKey('proxy-auto-badge-${group.name}'),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 1,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.tertiaryContainer,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              _zh ? '自动' : 'AUTO',
-                              style: Theme.of(context).textTheme.labelSmall,
-                            ),
+                        Container(
+                          key: ValueKey('proxy-auto-badge-${group.name}'),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.tertiaryContainer,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            _zh ? '自动' : 'AUTO',
+                            style: Theme.of(context).textTheme.labelSmall,
                           ),
                         ),
                     ],
@@ -462,6 +481,19 @@ class _ProxyListPageState extends State<ProxyListPage> {
             ],
           ),
         ),
+        // ── Auto-route explanation: always visible, never tooltip-only ────
+        if (_selection.allGroups.any((g) => g.isAuto))
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+            child: Text(
+              _zh
+                  ? '部分组由内核自动选路，手动选择可能无效'
+                  : 'Some groups are auto-routed by the kernel; manual picks may not apply',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
         // ── View: segmented switch + force-select debug control ────────
         _buildSectionLabel('视图', 'View'),
         Padding(
@@ -768,6 +800,24 @@ class _ProxyListPageState extends State<ProxyListPage> {
                     : 'Current node unavailable (poll timed out)',
                 key: const ValueKey('proxy-poll-timeout'),
                 style: textTheme.bodySmall?.copyWith(color: scheme.error),
+              ),
+            ),
+          // ── Technical basis: separate register, same page ─────────────
+          if (_bestRank != null && _bestState == _BestState.suggestSwitch)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                _zh
+                    ? '延迟 ${_bestRank!.ewma.toStringAsFixed(0)}ms  │  '
+                          '抖动 ${_bestRank!.jitter.toStringAsFixed(0)}ms  │  '
+                          '失败 ${_bestRank!.failures} 次'
+                    : 'Latency ${_bestRank!.ewma.toStringAsFixed(0)}ms  │  '
+                          'Jitter ${_bestRank!.jitter.toStringAsFixed(0)}ms  │  '
+                          'Failures ${_bestRank!.failures}',
+                key: const ValueKey('proxy-best-technical'),
+                style: textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
             ),
         ],
