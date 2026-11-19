@@ -82,6 +82,7 @@ flutter:
 
   # To add assets to your application, add an assets section, like this:
   assets:
+    - assets/ip/china_ip_list.txt
     - assets/globe/countries.geojson
     - assets/globe/earth-day-2k.jpg
     - assets/globe/earth-night-2k.jpg

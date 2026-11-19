@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import 'app.dart';
+import 'proxies/address_filter.dart';
 import 'proxies/scheduler_wrapper.dart';
 import 'scheduler/frb_generated.dart';
 import 'settings/app_settings.dart';
@@ -33,6 +34,9 @@ void main() async {
   // Restore the persisted routing backend preference before the first frame,
   // so the settings page and scheduler chip never flash the wrong value.
   await SchedulerWrapper.loadBackendPreference();
+  // Restore persisted address-bypass presets before the first frame; the CN
+  // CIDR index is prefetched here when the cn preset is enabled.
+  await AddressFilterController.loadEnabled();
   // Attach the Rust scheduler when a native library is bundled. A missing
   // dylib (tests, web, older installs) is fine: SchedulerWrapper falls back
   // to its equivalent Dart implementation.

@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:ayatsuri/l10n/app_localizations.dart';
 
 import '../data/endpoints.dart';
+import 'address_filter.dart';
 import 'country_map.dart';
 import 'probe_history.dart';
 import 'scheduler_wrapper.dart';
@@ -96,16 +97,31 @@ class ProxySelection {
   /// Window statistics for one proxy; `null` if never probed.
   ProbeStats? statsFor(String name) => _selector.statsFor(name);
 
-  /// NON-routable node names that must never enter scheduling: `DIRECT`
-  /// bypasses the proxy entirely, so its probe latency can look attractive
-  /// while providing no proxying at all.
-  static bool _ignoredByScheduler(String name) =>
-      name.toUpperCase() == 'DIRECT';
+  /// Kernel-only group placeholders: they are policies, not real proxies, so
+  /// they must never enter scheduling, the node list or the map candidates.
+  /// Exact, case-insensitive match: names like `REJECT-1` or `Match node` are
+  /// ordinary nodes and must survive.
+  static const Set<String> kKernelPlaceholders = <String>{
+    'DIRECT',
+    'REJECT',
+    'MATCH',
+    'COMPATIBLE',
+  };
 
-  /// Scheduler candidates with DIRECT removed.
+  static bool _ignoredByScheduler(String name) =>
+      kKernelPlaceholders.contains(name.toUpperCase());
+
+  /// Address presets apply to every consumer of proxy names — scheduling,
+  /// the node list and the map candidates. Empty presets are a no-op.
+  bool _hiddenByAddress(String name) =>
+      shouldHideAddress(name, AddressFilterController.enabled);
+
+  /// Scheduler candidates with kernel placeholders and filtered addresses
+  /// removed. The same placeholder filter is used by [nodesForGroup] and
+  /// [candidatesForMapId] so all three views stay consistent.
   Iterable<String> _routable(Iterable<String>? candidates) =>
       (candidates ?? _selector.scheduler.knownProxies).where(
-        (name) => !_ignoredByScheduler(name),
+        (name) => !_ignoredByScheduler(name) && !_hiddenByAddress(name),
       );
 
   /// Non-destructive routing suggestion; does not switch any node.
@@ -287,7 +303,10 @@ class ProxySelection {
     final out = <ProxyItem>[];
     for (final name in group.all) {
       final proxy = proxies[name];
-      if (proxy != null) out.add(proxy);
+      if (proxy == null) continue;
+      if (_ignoredByScheduler(name)) continue;
+      if (_hiddenByAddress(name)) continue;
+      out.add(proxy);
     }
     return out;
   }
@@ -402,6 +421,8 @@ class ProxySelection {
       for (final name in group.all) {
         final proxy = proxies[name];
         if (proxy == null) continue;
+        if (_ignoredByScheduler(name)) continue;
+        if (_hiddenByAddress(name)) continue;
         if (!isProxyInCountry(name, pattern)) continue;
         out.add(ProxyCandidate(group: group, proxy: proxy));
       }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:ayatsuri/l10n/app_localizations.dart';
 
 import '../data/endpoints.dart';
+import '../proxies/address_filter.dart';
 import '../proxies/scheduler_wrapper.dart';
 import 'advanced_console.dart';
 import 'app_settings.dart';
@@ -476,6 +477,7 @@ class SettingsPage extends StatelessWidget {
                 value: s.autoApplyRecommendation,
                 onChanged: (v) => set(s.copyWith(autoApplyRecommendation: v)),
               ),
+              _addressBypassSection(context),
               const Divider(height: 8),
               SegmentedButton<ProbeSort>(
                 segments: [
@@ -512,6 +514,135 @@ class SettingsPage extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+
+  /// Persistent address-bypass presets. The source of truth is the core
+  /// controller's notifier, not `AppSettings`: this keeps the freezed model
+  /// untouched and makes switches reflect changes made on other pages (P9).
+  Widget _addressBypassSection(BuildContext context) {
+    void toggle(AddressPreset preset, bool enabled) {
+      final next = Set<AddressPreset>.from(AddressFilterController.enabled);
+      if (enabled) {
+        next.add(preset);
+      } else {
+        next.remove(preset);
+      }
+      // setEnabled updates the notifier synchronously, which rebuilds the
+      // builder below; persistence and CN-index prefetch happen in core.
+      AddressFilterController.setEnabled(next);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _header(context, _smartLabel(context, '地址绕过', 'Address bypass')),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text(
+            _smartLabel(
+              context,
+              '按节点名中的地址隐藏占位节点；全部关闭时不过滤任何节点。开启私网或中国段可能误伤合法节点。',
+              'Hide placeholder nodes by the address in their name; with all off nothing is filtered. Private/CN presets may hide legitimate nodes.',
+            ),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+        ValueListenableBuilder<CnIndexState>(
+          valueListenable: AddressFilterController.cnIndexStateNotifier,
+          builder: (context, cnState, _) {
+            if (cnState != CnIndexState.failed) {
+              return const SizedBox.shrink();
+            }
+            // Non-blocking: the page stays usable; toggling the CN switch
+            // again calls loadCnIndex() and retries the load.
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Text(
+                _smartLabel(
+                  context,
+                  '中国 IP 列表加载失败，CN 过滤暂不可用；关闭后重新开启可重试。',
+                  'China IP list failed to load; CN filtering is unavailable. Toggle the switch off and on to retry.',
+                ),
+                key: const ValueKey('addr-cn-load-warning'),
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontSize: 12,
+                ),
+              ),
+            );
+          },
+        ),
+        ValueListenableBuilder<Set<AddressPreset>>(
+          valueListenable: AddressFilterController.enabledNotifier,
+          builder: (context, enabled, _) {
+            return Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 4,
+                  ),
+                  child: Text(
+                    _smartLabel(
+                      context,
+                      '已启用 ${enabled.length} / ${AddressPreset.values.length} 项',
+                      '${enabled.length} / ${AddressPreset.values.length} enabled',
+                    ),
+                    key: const ValueKey('addr-preset-count'),
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                ),
+                SwitchListTile(
+                  key: const ValueKey('addr-preset-private'),
+                  title: Text(
+                    _smartLabel(context, '私网地址', 'Private addresses'),
+                  ),
+                  subtitle: Text(
+                    _smartLabel(
+                      context,
+                      '10/8、172.16/12、192.168/16',
+                      '10/8, 172.16/12, 192.168/16',
+                    ),
+                  ),
+                  value: enabled.contains(AddressPreset.private),
+                  onChanged: (v) => toggle(AddressPreset.private, v),
+                ),
+                SwitchListTile(
+                  key: const ValueKey('addr-preset-loopback'),
+                  title: Text(
+                    _smartLabel(context, '回环地址', 'Loopback addresses'),
+                  ),
+                  subtitle: Text(
+                    _smartLabel(
+                      context,
+                      '127/8 与 localhost',
+                      '127/8 and localhost',
+                    ),
+                  ),
+                  value: enabled.contains(AddressPreset.loopback),
+                  onChanged: (v) => toggle(AddressPreset.loopback, v),
+                ),
+                SwitchListTile(
+                  key: const ValueKey('addr-preset-cn'),
+                  title: Text(
+                    _smartLabel(context, '中国 CIDR 段', 'China CIDR blocks'),
+                  ),
+                  subtitle: Text(
+                    _smartLabel(
+                      context,
+                      '内置中国 IP 地址段列表',
+                      'Bundled China IP CIDR list',
+                    ),
+                  ),
+                  value: enabled.contains(AddressPreset.cn),
+                  onChanged: (v) => toggle(AddressPreset.cn, v),
+                ),
+              ],
+            );
+          },
+        ),
+      ],
     );
   }
 

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:ayatsuri/settings/app_settings.dart';
 import 'package:ayatsuri/l10n/app_localizations.dart';
+import 'package:ayatsuri/proxies/address_filter.dart';
 import 'package:ayatsuri/proxies/scheduler_wrapper.dart';
 import 'package:ayatsuri/scheduler/frb_generated.dart';
 import 'package:ayatsuri/settings/settings_page.dart';
@@ -416,5 +417,195 @@ void main() {
     await SchedulerWrapper.loadBackendPreference();
     expect(SchedulerWrapper.backendPreference, RoutingBackend.rustFirst);
     SchedulerWrapper.resetForTests();
+  });
+
+  group('address bypass presets', () {
+    setUp(() {
+      AddressFilterController.resetForTests();
+      // AddressFilterController uses the legacy SharedPreferences API, so the
+      // mock initial values seam applies here (unlike AppSettingsController).
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+    });
+
+    tearDown(() {
+      AddressFilterController.resetForTests();
+    });
+
+    test('default is empty (no filtering)', () async {
+      await AddressFilterController.loadEnabled();
+      expect(AddressFilterController.enabled, isEmpty);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getStringList(AddressFilterController.presetsKey), isNull);
+    });
+
+    test('toggling presets persists and notifies listeners', () async {
+      final seen = <Set<AddressPreset>>[];
+      void listener() =>
+          seen.add(Set<AddressPreset>.from(AddressFilterController.enabled));
+      AddressFilterController.enabledNotifier.addListener(listener);
+      await AddressFilterController.setEnabled(<AddressPreset>{
+        AddressPreset.private,
+        AddressPreset.cn,
+      });
+      AddressFilterController.enabledNotifier.removeListener(listener);
+
+      expect(AddressFilterController.enabled, <AddressPreset>{
+        AddressPreset.private,
+        AddressPreset.cn,
+      });
+      expect(seen, isNotEmpty);
+      expect(seen.last, <AddressPreset>{
+        AddressPreset.private,
+        AddressPreset.cn,
+      });
+      final prefs = await SharedPreferences.getInstance();
+      expect(
+        prefs.getStringList(AddressFilterController.presetsKey),
+        unorderedEquals(<String>['private', 'cn']),
+      );
+    });
+
+    test('reopening restores the persisted presets', () async {
+      await AddressFilterController.setEnabled(<AddressPreset>{
+        AddressPreset.loopback,
+      });
+      // Simulate a process restart: drop in-memory state, keep storage.
+      AddressFilterController.resetForTests();
+      expect(AddressFilterController.enabled, isEmpty);
+      await AddressFilterController.loadEnabled();
+      expect(AddressFilterController.enabled, <AddressPreset>{
+        AddressPreset.loopback,
+      });
+      expect(AddressFilterController.enabledNotifier.value, <AddressPreset>{
+        AddressPreset.loopback,
+      });
+    });
+
+    testWidgets('settings page toggles and reflects cross-page changes', (
+      tester,
+    ) async {
+      final controller = AppSettingsController(
+        storeFactory: () async => _FakeSettingsStore(),
+      );
+      await controller.load();
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: const [
+            AppLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: SettingsPage(controller: controller),
+        ),
+      );
+
+      // Scroll the ListView until the address-bypass section is visible.
+      for (
+        var i = 0;
+        i < 15 && find.text('Address bypass').evaluate().isEmpty;
+        i++
+      ) {
+        await tester.drag(find.byType(ListView).first, const Offset(0, -200));
+        await tester.pumpAndSettle();
+      }
+      expect(find.text('Address bypass'), findsOneWidget);
+      expect(find.byKey(const ValueKey('addr-preset-private')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('addr-preset-loopback')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('addr-preset-cn')), findsOneWidget);
+      expect(find.text('0 / 3 enabled'), findsOneWidget);
+
+      // Tapping a tile title flips exactly one preset and the count updates.
+      await tester.tap(find.text('Private addresses'));
+      await tester.pumpAndSettle();
+      expect(AddressFilterController.enabled, <AddressPreset>{
+        AddressPreset.private,
+      });
+      expect(find.text('1 / 3 enabled'), findsOneWidget);
+
+      // A change made elsewhere (another page / restore) is picked up by the
+      // ValueListenableBuilder without touching AppSettings.
+      await AddressFilterController.setEnabled(<AddressPreset>{
+        AddressPreset.loopback,
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('1 / 3 enabled'), findsOneWidget);
+      final privateSwitch = tester.widget<SwitchListTile>(
+        find.byKey(const ValueKey('addr-preset-private')),
+      );
+      final loopSwitch = tester.widget<SwitchListTile>(
+        find.byKey(const ValueKey('addr-preset-loopback')),
+      );
+      expect(privateSwitch.value, isFalse);
+      expect(loopSwitch.value, isTrue);
+    });
+
+    testWidgets('CN index load failure shows a non-blocking hint', (
+      tester,
+    ) async {
+      final originalLoader = AddressFilterController.cnAssetLoader;
+      addTearDown(() => AddressFilterController.cnAssetLoader = originalLoader);
+
+      // Fail the load while the CN preset is on, as a real startup failure
+      // would. The controller exposes the failure as readable state.
+      AddressFilterController.cnAssetLoader = (path) {
+        throw StateError('injected asset failure');
+      };
+      await AddressFilterController.setEnabled(<AddressPreset>{
+        AddressPreset.cn,
+      });
+      expect(AddressFilterController.cnIndexState, CnIndexState.failed);
+
+      final controller = AppSettingsController(
+        storeFactory: () async => _FakeSettingsStore(),
+      );
+      await controller.load();
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: const [
+            AppLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: SettingsPage(controller: controller),
+        ),
+      );
+
+      for (
+        var i = 0;
+        i < 15 && find.text('Address bypass').evaluate().isEmpty;
+        i++
+      ) {
+        await tester.drag(find.byType(ListView).first, const Offset(0, -200));
+        await tester.pumpAndSettle();
+      }
+      expect(
+        find.byKey(const ValueKey('addr-cn-load-warning')),
+        findsOneWidget,
+      );
+      // Non-blocking: the switches remain usable despite the failure.
+      expect(find.byKey(const ValueKey('addr-preset-cn')), findsOneWidget);
+
+      // Restoring the asset and toggling the preset retries successfully;
+      // the hint disappears without a restart.
+      AddressFilterController.cnAssetLoader = originalLoader;
+      // The retry loads the real bundled asset; run it outside the fake
+      // async zone, where rootBundle.loadString would never complete.
+      await tester.runAsync(() async {
+        await AddressFilterController.setEnabled(<AddressPreset>{});
+        await AddressFilterController.setEnabled(<AddressPreset>{
+          AddressPreset.cn,
+        });
+      });
+      await tester.pumpAndSettle();
+      expect(AddressFilterController.cnIndexState, CnIndexState.ready);
+      expect(find.byKey(const ValueKey('addr-cn-load-warning')), findsNothing);
+    });
   });
 }

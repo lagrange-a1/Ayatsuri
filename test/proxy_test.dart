@@ -7,8 +7,10 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:ayatsuri/data/endpoints.dart';
+import 'package:ayatsuri/proxies/address_filter.dart';
 import 'package:ayatsuri/proxies/country_map.dart';
 import 'package:ayatsuri/l10n/app_localizations.dart';
 import 'package:ayatsuri/proxies/proxy_service.dart';
@@ -121,6 +123,7 @@ class FakeMihomoAPI extends MihomoAPI {
 }
 
 void main() async {
+  TestWidgetsFlutterBinding.ensureInitialized();
   // Load dotenv from memory rather than an asset: `.env` is no longer
   // bundled as a pubspec asset, so `dotenv.load()` (asset-based) fails.
   dotenv.loadFromString(envString: 'host=localhost\nport=9091\nsecret=***\n');
@@ -130,6 +133,8 @@ void main() async {
   setUp(() {
     fake = FakeMihomoAPI();
     selection = ProxySelection(api: fake);
+    AddressFilterController.resetForTests();
+    SharedPreferences.setMockInitialValues(<String, Object>{});
   });
 
   test('load proxies and groups', () async {
@@ -398,5 +403,191 @@ void main() async {
 
     await selection.rankProxies(const ['DIRECT', 'HK 2']);
     expect(scheduler.lastCandidates, ['HK 2']);
+  });
+
+  test('scheduling ignores all kernel placeholder tokens exactly', () async {
+    final scheduler = RecordingScheduler();
+    final recording = RecordingSelector(scheduler);
+    final s = ProxySelection(api: fake, selector: recording);
+
+    final best = await s.bestProxy(
+      candidates: const [
+        'HK 2',
+        'DIRECT',
+        'direct',
+        'REJECT',
+        'reject',
+        'MATCH',
+        'Match',
+        'COMPATIBLE',
+        'compatible',
+        'REJECT-1',
+        'Match node',
+        'compatible proxy',
+      ],
+      current: 'HK 2',
+    );
+    expect(best, 'HK 2');
+    // Exact placeholders (any case) are gone; names merely containing the
+    // token are ordinary proxies and must survive.
+    expect(recording.bestCandidates, [
+      'HK 2',
+      'REJECT-1',
+      'Match node',
+      'compatible proxy',
+    ]);
+
+    await s.rankProxies(const [
+      'DIRECT',
+      'REJECT',
+      'MATCH',
+      'COMPATIBLE',
+      'reject',
+      'HK 2',
+    ]);
+    expect(scheduler.lastCandidates, ['HK 2']);
+  });
+
+  test(
+    'kernel placeholders are excluded from node list and map candidates',
+    () async {
+      fake.mockProxies = <String, Map<String, dynamic>>{
+        'DIRECT': {'name': 'DIRECT', 'type': 'Direct', 'alive': true},
+        'reject': {'name': 'reject', 'type': 'Reject', 'alive': true},
+        'MATCH': {'name': 'MATCH', 'type': 'Selector', 'alive': true},
+        'Compatible': {
+          'name': 'Compatible',
+          'type': 'Compatible',
+          'alive': true,
+        },
+        'REJECT-1': {'name': 'REJECT-1', 'type': 'Socks5', 'alive': true},
+        'Match node': {'name': 'Match node', 'type': 'Socks5', 'alive': true},
+        'HK 2': {'name': 'HK 2', 'type': 'Socks5', 'alive': true},
+      };
+      fake.mockGroups = <Map<String, dynamic>>[
+        {
+          'name': 'go',
+          'type': 'Selector',
+          'all': [
+            'DIRECT',
+            'reject',
+            'MATCH',
+            'Compatible',
+            'REJECT-1',
+            'Match node',
+            'NO-SUCH-PROXY', // missing proxies are still skipped
+            'HK 2',
+          ],
+          'now': 'HK 2',
+        },
+      ];
+      await selection.load();
+
+      expect(selection.nodesForGroup('go').map((p) => p.name).toList(), [
+        'REJECT-1',
+        'Match node',
+        'HK 2',
+      ]);
+
+      // An unknown mapId becomes a literal pattern, so a proxy named exactly
+      // `reject` would otherwise be a candidate here; only the lookalike stays.
+      expect(
+        selection
+            .candidatesForMapId('REJECT')
+            .map((c) => c.proxy.name)
+            .toList(),
+        ['REJECT-1'],
+      );
+      expect(
+        selection.candidatesForMapId('MATCH').map((c) => c.proxy.name).toList(),
+        ['Match node'],
+      );
+      expect(
+        selection.candidatesForMapId('HK 2').map((c) => c.proxy.name).toList(),
+        ['HK 2'],
+      );
+    },
+  );
+
+  test('address presets filter the node list and map candidates', () async {
+    fake.mockProxies = <String, Map<String, dynamic>>{
+      'HK 2': {'name': 'HK 2', 'type': 'Socks5', 'alive': true},
+      'CN 10.0.0.1': {'name': 'CN 10.0.0.1', 'type': 'Socks5', 'alive': true},
+      'LOOPBACK 127.0.0.1': {
+        'name': 'LOOPBACK 127.0.0.1',
+        'type': 'Socks5',
+        'alive': true,
+      },
+      'CN 1': {'name': 'CN 1', 'type': 'Socks5', 'alive': true},
+    };
+    fake.mockGroups = <Map<String, dynamic>>[
+      {
+        'name': 'go',
+        'type': 'Selector',
+        'all': ['HK 2', 'CN 10.0.0.1', 'LOOPBACK 127.0.0.1', 'CN 1'],
+        'now': 'HK 2',
+      },
+    ];
+    await selection.load();
+
+    // Default empty presets: nothing changes.
+    expect(selection.nodesForGroup('go').map((p) => p.name).toList(), [
+      'HK 2',
+      'CN 10.0.0.1',
+      'LOOPBACK 127.0.0.1',
+      'CN 1',
+    ]);
+    expect(
+      selection.candidatesForMapId('CN').map((c) => c.proxy.name).toList(),
+      ['CN 10.0.0.1', 'CN 1'],
+    );
+
+    await AddressFilterController.setEnabled(<AddressPreset>{
+      AddressPreset.private,
+      AddressPreset.loopback,
+    });
+    expect(selection.nodesForGroup('go').map((p) => p.name).toList(), [
+      'HK 2',
+      'CN 1',
+    ]);
+    expect(
+      selection.candidatesForMapId('CN').map((c) => c.proxy.name).toList(),
+      ['CN 1'],
+    );
+
+    // Disabling restores the original behaviour without a reload.
+    await AddressFilterController.setEnabled(<AddressPreset>{});
+    expect(selection.nodesForGroup('go'), hasLength(4));
+    expect(selection.candidatesForMapId('CN'), hasLength(2));
+  });
+
+  test('address presets combine with DIRECT filtering in scheduling', () async {
+    final scheduler = RecordingScheduler();
+    final recording = RecordingSelector(scheduler);
+    final s = ProxySelection(api: fake, selector: recording);
+
+    await AddressFilterController.setEnabled(<AddressPreset>{
+      AddressPreset.private,
+    });
+    final best = await s.bestProxy(
+      candidates: const [
+        'DIRECT',
+        'LAN 192.168.1.1',
+        'HK 2',
+        'direct',
+        '10.0.0.1',
+        'US 3',
+      ],
+      current: 'HK 2',
+    );
+    expect(best, 'HK 2');
+    expect(recording.bestCandidates, ['HK 2', 'US 3']);
+
+    await s.rankProxies(const ['DIRECT', '192.168.0.1', 'HK 2', 'direct']);
+    expect(scheduler.lastCandidates, ['HK 2']);
+
+    await AddressFilterController.setEnabled(<AddressPreset>{});
+    await s.bestProxy(candidates: const ['DIRECT', 'HK 2', 'CN 1']);
+    expect(recording.bestCandidates, ['HK 2', 'CN 1']);
   });
 }
