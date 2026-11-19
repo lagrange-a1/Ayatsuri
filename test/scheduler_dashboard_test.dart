@@ -18,6 +18,7 @@ import 'package:ayatsuri/l10n/app_localizations.dart';
 import 'package:ayatsuri/proxies/proxy_service.dart';
 import 'package:ayatsuri/proxies/scheduler_wrapper.dart';
 import 'package:ayatsuri/proxies/smart_selector.dart';
+import 'package:ayatsuri/settings/boot_policy.dart';
 
 /// Minimal controller: one Selector (pin-able) plus one automatic pool that
 /// must never be offered to the group picker or the auto-select PUT.
@@ -340,6 +341,108 @@ void main() {
   setUp(() {
     SchedulerWrapper.resetForTests();
     SharedPreferences.setMockInitialValues(<String, Object>{});
+    // The boot policy lives in a global singleton; every test starts from the
+    // manual-only default so startup behaviour is never inherited.
+    BootPolicyController.instance.resetForTests();
+  });
+
+  testWidgets('boot policy probe runs exactly one full-group probe on mount', (
+    tester,
+  ) async {
+    await _prepare(tester);
+    BootPolicyController.instance.notifier.value = ProbeBootstrap.probe;
+    final api = FakeMihomoApi();
+    final selection = await _loadedRecording(
+      api,
+      FakeScheduler(bestProxy: 'B'),
+      best: 'B',
+    );
+    await tester.pumpWidget(_app(selection));
+    await tester.pumpAndSettle();
+
+    // One full pass over the group: each member probed exactly once. The
+    // startup probe only builds samples — it never commits a node.
+    expect(selection.probes, <String>['A', 'B', 'C']);
+    expect(api.selectCalls, isEmpty);
+    // `probe` does not seed the periodic loop; the switch stays off.
+    expect(
+      tester
+          .widget<Switch>(
+            find.byKey(const ValueKey('scheduler-auto-schedule-switch')),
+          )
+          .value,
+      isFalse,
+    );
+
+    // A whole period later the probe has not run again.
+    await tester.pump(kAutoSchedulePeriod + const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(selection.probes, <String>['A', 'B', 'C']);
+    expect(api.selectCalls, isEmpty);
+  });
+
+  testWidgets('boot policy off performs no automatic probe or schedule', (
+    tester,
+  ) async {
+    await _prepare(tester);
+    BootPolicyController.instance.notifier.value = ProbeBootstrap.off;
+    final api = FakeMihomoApi();
+    final selection = await _loadedRecording(
+      api,
+      FakeScheduler(bestProxy: 'B'),
+      best: 'B',
+    );
+    await tester.pumpWidget(_app(selection));
+    await tester.pumpAndSettle();
+
+    expect(selection.probes, isEmpty);
+    expect(api.selectCalls, isEmpty);
+    expect(
+      tester
+          .widget<Switch>(
+            find.byKey(const ValueKey('scheduler-auto-schedule-switch')),
+          )
+          .value,
+      isFalse,
+    );
+    await tester.pump(kAutoSchedulePeriod + const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(selection.probes, isEmpty);
+    expect(api.selectCalls, isEmpty);
+  });
+
+  testWidgets('boot policy probeAndSchedule probes once and seeds the timer', (
+    tester,
+  ) async {
+    await _prepare(tester);
+    BootPolicyController.instance.notifier.value =
+        ProbeBootstrap.probeAndSchedule;
+    final api = FakeMihomoApi();
+    final selection = await _loadedRecording(
+      api,
+      FakeScheduler(bestProxy: 'B'),
+      best: 'B',
+    );
+    await tester.pumpWidget(_app(selection));
+    await tester.pumpAndSettle();
+
+    // Same one-shot startup probe as `probe`, switch on from the policy, but
+    // still no commit until a scheduled cycle actually runs.
+    expect(selection.probes, <String>['A', 'B', 'C']);
+    expect(api.selectCalls, isEmpty);
+    expect(
+      tester
+          .widget<Switch>(
+            find.byKey(const ValueKey('scheduler-auto-schedule-switch')),
+          )
+          .value,
+      isTrue,
+    );
+
+    await tester.pump(kAutoSchedulePeriod);
+    await tester.pumpAndSettle();
+    expect(selection.probes, <String>['A', 'B', 'C', 'A', 'B', 'C']);
+    expect(api.selectCalls, <(String, String)>[('MAIN', 'B')]);
   });
 
   testWidgets(
@@ -396,11 +499,11 @@ void main() {
 
       // B has the lowest score (20 < 40) and is the only highlighted row.
       expect(find.byKey(const ValueKey('scheduler-lowest-B')), findsOneWidget);
-      expect(find.text('Lowest'), findsOneWidget);
+      expect(find.text('Best'), findsOneWidget);
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('scheduler-rank-B')),
-          matching: find.text('Lowest'),
+          matching: find.text('Best'),
         ),
         findsOneWidget,
       );
@@ -526,8 +629,12 @@ void main() {
     expect(toggle.value, isFalse);
     expect(find.byKey(const ValueKey('scheduler-backend')), findsOneWidget);
     expect(find.byKey(const ValueKey('scheduler-auto-select')), findsOneWidget);
-    // Plain-language legend at the top of the dashboard.
-    expect(find.textContaining('lower score is better'), findsOneWidget);
+    // Technical legend describing the sort key and metric units.
+    expect(
+      find.textContaining('Sort key: Score (ascending, lower first)'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('EWMA/Jitter in ms'), findsOneWidget);
 
     expect(idle.probes, isEmpty);
     expect(api.selectCalls, isEmpty);

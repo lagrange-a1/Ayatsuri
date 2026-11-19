@@ -6,6 +6,7 @@ import 'package:ayatsuri/proxies/address_filter.dart';
 import 'package:ayatsuri/proxies/scheduler_wrapper.dart';
 import 'package:ayatsuri/scheduler/frb_generated.dart';
 import 'package:ayatsuri/settings/settings_page.dart';
+import 'package:ayatsuri/settings/boot_policy.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -607,5 +608,88 @@ void main() {
       expect(AddressFilterController.cnIndexState, CnIndexState.ready);
       expect(find.byKey(const ValueKey('addr-cn-load-warning')), findsNothing);
     });
+  });
+
+  group('startup probe policy UI', () {
+    setUp(() => BootPolicyController.instance.resetForTests());
+    tearDown(() => BootPolicyController.instance.resetForTests());
+
+    testWidgets(
+      'startup behaviour renders and a selection persists through the controller',
+      (tester) async {
+        final controller = AppSettingsController(
+          storeFactory: () async => _FakeSettingsStore(),
+        );
+        await controller.load();
+        await tester.pumpWidget(
+          MaterialApp(
+            localizationsDelegates: const [
+              AppLocalizations.delegate,
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: SettingsPage(controller: controller),
+          ),
+        );
+
+        // Scroll the ListView until the startup section is visible. Same drag
+        // technique as the sibling widget tests: TextFields own extra Scrollables.
+        for (
+          var i = 0;
+          i < 15 && find.text('Startup behaviour').evaluate().isEmpty;
+          i++
+        ) {
+          await tester.drag(find.byType(ListView).first, const Offset(0, -200));
+          await tester.pumpAndSettle();
+        }
+        const buttonKey = ValueKey('settings-startup-probe');
+        // scrollUntilVisible can stop with the segment row's labels still a
+        // few pixels past the viewport bottom; nudge until the exact target
+        // rect is fully inside the 800x600 test surface before tapping.
+        Future<void> bringIntoView(Finder target) async {
+          for (var i = 0; i < 20; i++) {
+            final rect = tester.getRect(target);
+            if (rect.top >= 0 && rect.bottom <= 600) return;
+            await tester.drag(
+              find.byType(ListView).first,
+              const Offset(0, -120),
+            );
+            await tester.pumpAndSettle();
+          }
+        }
+
+        expect(find.text('Startup behaviour'), findsOneWidget);
+        // Subtitle explains manual-only off vs the two auto modes.
+        expect(find.textContaining('full-group probe'), findsOneWidget);
+
+        expect(find.byKey(buttonKey), findsOneWidget);
+        SegmentedButton<ProbeBootstrap> readButton() => tester
+            .widget<SegmentedButton<ProbeBootstrap>>(find.byKey(buttonKey));
+        expect(readButton().segments, hasLength(3));
+        // Default is off and the button mirrors the controller's notifier.
+        expect(readButton().selected, <ProbeBootstrap>{ProbeBootstrap.off});
+        expect(BootPolicyController.instance.mode, ProbeBootstrap.off);
+
+        await bringIntoView(find.text('Probe + schedule'));
+        await tester.tap(find.text('Probe + schedule'));
+        await tester.pumpAndSettle();
+        expect(
+          BootPolicyController.instance.notifier.value,
+          ProbeBootstrap.probeAndSchedule,
+        );
+        expect(readButton().selected, <ProbeBootstrap>{
+          ProbeBootstrap.probeAndSchedule,
+        });
+
+        // A change made elsewhere rebuilds this section without touching
+        // AppSettings, so other pages and the init code stay in agreement.
+        await BootPolicyController.instance.set(ProbeBootstrap.probe);
+        await tester.pumpAndSettle();
+        expect(BootPolicyController.instance.mode, ProbeBootstrap.probe);
+        expect(readButton().selected, <ProbeBootstrap>{ProbeBootstrap.probe});
+      },
+    );
   });
 }

@@ -416,6 +416,12 @@ Future<void> _pumpWith(
   await tester.pumpAndSettle();
 }
 
+/// Open the sort popup; its menu items are only mounted while it is open.
+Future<void> _openSortMenu(WidgetTester tester) async {
+  await tester.tap(find.byKey(const ValueKey('proxy-sort-popup')));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   // MihomoAPI's constructor reads dotenv; install an in-memory env the same
   // way the other test files do (`.env` is no longer a bundled asset).
@@ -754,17 +760,14 @@ void main() {
     tester,
   ) async {
     final cases = <(ProxySelection, String)>[
-      (
-        RecordingProxySelection(api: FakeProxyApi()),
-        'Recommendation: no data yet',
-      ),
+      (RecordingProxySelection(api: FakeProxyApi()), 'No samples'),
       (
         RecordingProxySelection(api: FakeProxyApi(), best: 'HK 2'),
-        'Recommendation: current node is best',
+        'Current node is best',
       ),
       (
         RecordingProxySelection(api: FakeProxyApi(), best: 'CN 1'),
-        'Recommendation: switch to CN 1',
+        'Switch to CN 1',
       ),
     ];
     for (var i = 0; i < cases.length; i++) {
@@ -772,6 +775,7 @@ void main() {
       await _pumpWith(tester, api: FakeProxyApi(), selection: selection);
 
       expect(find.byKey(const ValueKey('proxy-best-state')), findsOneWidget);
+      expect(find.text('Recommendation'), findsOneWidget);
       expect(find.text(message), findsOneWidget);
       // Only the "switch" state paints a recommendation badge.
       expect(
@@ -884,6 +888,45 @@ void main() {
 
   // ── FlClash-style sort / hide / one-click group ping ──────────────────
 
+  testWidgets('sort is a labelled popup with a checkmark on the active mode', (
+    tester,
+  ) async {
+    await _pumpPage(tester);
+
+    // No bare sort chips: the popup label is always visible, the items only
+    // exist after the user opens it.
+    expect(find.text('Sort'), findsOneWidget);
+    expect(find.byKey(const ValueKey('proxy-sort-popup')), findsOneWidget);
+    expect(find.byKey(const ValueKey('proxy-sort-name')), findsNothing);
+
+    await _openSortMenu(tester);
+
+    for (final mode in <String>['defaultOrder', 'latency', 'name']) {
+      expect(find.byKey(ValueKey('proxy-sort-$mode')), findsOneWidget);
+    }
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('proxy-sort-defaultOrder')),
+        matching: find.byIcon(Icons.check),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('proxy-sort-name')),
+        matching: find.byIcon(Icons.check),
+      ),
+      findsNothing,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('proxy-sort-name')));
+    await tester.pumpAndSettle();
+
+    expect(_topOf(tester, 'CN 1'), lessThan(_topOf(tester, 'HK 2')));
+    // Selecting a mode closes the popup.
+    expect(find.byKey(const ValueKey('proxy-sort-name')), findsNothing);
+  });
+
   testWidgets('sort default preserves controller config order', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1200, 1400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -899,6 +942,7 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await _pumpPage(tester);
 
+    await _openSortMenu(tester);
     await tester.tap(find.byKey(const ValueKey('proxy-sort-name')));
     await tester.pumpAndSettle();
 
@@ -918,6 +962,7 @@ void main() {
       selection: RecordingProxySelection(api: api),
     );
 
+    await _openSortMenu(tester);
     await tester.tap(find.byKey(const ValueKey('proxy-sort-latency')));
     await tester.pumpAndSettle();
 

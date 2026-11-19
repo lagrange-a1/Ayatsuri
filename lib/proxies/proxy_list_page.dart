@@ -18,12 +18,13 @@
  * SchedulerDashboard that shares this page's ProxySelection, so observations
  * made here are visible to the scheduler and vice versa.
  *
- * The node view's group header offers FlClash-style controls: a default /
- * latency / name sort switch, an opt-in toggle that hides blocked (delay 0)
- * and timeout (delay -1) nodes (off by default so every node stays visible),
- * and a whole-group ping that probes all members in concurrent batches with
- * a progress spinner and tap de-bounce. Sorting never hides nodes; both
- * controls live on this page only, never on the globe page.
+ * The node view's group header offers FlClash-style controls: a labelled sort
+ * popup (default / latency / name), an opt-in toggle that hides blocked
+ * (delay 0) and timeout (delay -1) nodes (off by default so every node stays
+ * visible), and a whole-group ping that probes all members in concurrent
+ * batches with a progress spinner and tap de-bounce. Sorting never hides
+ * nodes; all controls live on this page only, never on the globe page.
+ * Controls are grouped under short, consistent section labels.
  *
  * All new copy is hand-written bilingual (see `_zh`); no generated l10n keys
  * are added.
@@ -413,9 +414,10 @@ class _ProxyListPageState extends State<ProxyListPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // ── Top group selector: every group, including auto pools ──────
+        // ── Groups: every group, including auto pools ──────────────────
+        _buildSectionLabel('分组', 'Groups'),
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
           child: Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -460,11 +462,39 @@ class _ProxyListPageState extends State<ProxyListPage> {
             ],
           ),
         ),
-        // ── Force-select switch + refresh ──────────────────────────────
+        // ── View: segmented switch + force-select debug control ────────
+        _buildSectionLabel('视图', 'View'),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
           child: Row(
             children: [
+              SegmentedButton<int>(
+                key: const ValueKey('proxy-view-switch'),
+                segments: <ButtonSegment<int>>[
+                  ButtonSegment<int>(
+                    value: 0,
+                    icon: const Icon(Icons.list_alt),
+                    label: Text(_zh ? '节点' : 'Nodes'),
+                    tooltip: _zh ? '查看节点列表' : 'View the node list',
+                  ),
+                  ButtonSegment<int>(
+                    value: 1,
+                    icon: const Icon(Icons.auto_awesome),
+                    label: Text(_zh ? '调度' : 'Schedule'),
+                    tooltip: _zh
+                        ? '查看调度排名与自动调度'
+                        : 'View scheduling ranks and auto-schedule',
+                  ),
+                ],
+                selected: <int>{_showScheduler ? 1 : 0},
+                onSelectionChanged: (selected) {
+                  setState(
+                    () => _showScheduler =
+                        selected.isNotEmpty && selected.first == 1,
+                  );
+                },
+              ),
+              const SizedBox(width: 8),
               Tooltip(
                 message: _zh
                     ? '自动组的节点通常由内核挑选。开启后点击节点会强制向内核发送选择请求，内核可能拒绝。仅用于调试。'
@@ -477,8 +507,14 @@ class _ProxyListPageState extends State<ProxyListPage> {
                   onChanged: (v) => setState(() => _devMode = v),
                 ),
               ),
-              Text(_zh ? '强制选择自动组' : 'Force-select auto groups'),
-              const Spacer(),
+              Expanded(
+                child: Text(
+                  _zh ? '强制选择自动组' : 'Force-select auto groups',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
               IconButton(
                 key: const ValueKey('proxy-refresh'),
                 tooltip: _zh ? '刷新' : 'Refresh',
@@ -486,36 +522,6 @@ class _ProxyListPageState extends State<ProxyListPage> {
                 onPressed: _load,
               ),
             ],
-          ),
-        ),
-        // ── M3 segmented switch: node list vs embedded scheduler ───────
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          child: SegmentedButton<int>(
-            key: const ValueKey('proxy-view-switch'),
-            segments: <ButtonSegment<int>>[
-              ButtonSegment<int>(
-                value: 0,
-                icon: const Icon(Icons.list_alt),
-                label: Text(_zh ? '节点' : 'Nodes'),
-                tooltip: _zh ? '查看节点列表' : 'View the node list',
-              ),
-              ButtonSegment<int>(
-                value: 1,
-                icon: const Icon(Icons.auto_awesome),
-                label: Text(_zh ? '调度' : 'Schedule'),
-                tooltip: _zh
-                    ? '查看调度排名与自动调度'
-                    : 'View scheduling ranks and auto-schedule',
-              ),
-            ],
-            selected: <int>{_showScheduler ? 1 : 0},
-            onSelectionChanged: (selected) {
-              setState(
-                () =>
-                    _showScheduler = selected.isNotEmpty && selected.first == 1,
-              );
-            },
           ),
         ),
         const Divider(height: 1),
@@ -529,6 +535,21 @@ class _ProxyListPageState extends State<ProxyListPage> {
     );
   }
 
+  /// Small consistent header for a group of controls.
+  Widget _buildSectionLabel(String zh, String en) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
+      child: Text(
+        _zh ? zh : en,
+        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+          color: scheme.primary,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
   String _sortLabel(_SortMode mode) {
     final zh = _zh;
     return switch (mode) {
@@ -538,30 +559,87 @@ class _ProxyListPageState extends State<ProxyListPage> {
     };
   }
 
-  /// Node-page group header: sort switch, opt-in hide toggle with an
-  /// explanation, and a whole-group ping with progress + tap de-bounce.
+  /// Node-page group header under its own section label: a sort popup, an
+  /// opt-in hide toggle with an explanation, and a whole-group ping with
+  /// progress + tap de-bounce.
   Widget _buildGroupHeader() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Wrap(
-            spacing: 6,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionLabel('排序与筛选', 'Sort & filter'),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          child: Row(
             children: [
-              for (final mode in _SortMode.values)
-                ChoiceChip(
-                  key: ValueKey('proxy-sort-${mode.name}'),
-                  label: Text(_sortLabel(mode)),
-                  selected: _sortMode == mode,
-                  onSelected: (_) {
-                    if (_sortMode == mode) return;
-                    setState(() => _sortMode = mode);
-                  },
+              PopupMenuButton<_SortMode>(
+                key: const ValueKey('proxy-sort-popup'),
+                tooltip: _zh ? '选择节点排序方式' : 'Choose how nodes are sorted',
+                initialValue: _sortMode,
+                onSelected: (mode) {
+                  if (_sortMode == mode) return;
+                  setState(() => _sortMode = mode);
+                },
+                itemBuilder: (context) => [
+                  for (final mode in _SortMode.values)
+                    PopupMenuItem<_SortMode>(
+                      key: ValueKey('proxy-sort-${mode.name}'),
+                      value: mode,
+                      child: Row(
+                        children: [
+                          Icon(
+                            _sortMode == mode
+                                ? Icons.check
+                                : Icons.radio_button_unchecked,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 10),
+                          Text(_sortLabel(mode)),
+                        ],
+                      ),
+                    ),
+                ],
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.sort, size: 18),
+                    const SizedBox(width: 6),
+                    Text(_zh ? '排序' : 'Sort'),
+                    const SizedBox(width: 6),
+                    Text(
+                      _sortLabel(_sortMode),
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                    const Icon(Icons.arrow_drop_down, size: 18),
+                  ],
                 ),
+              ),
+              const Spacer(),
+              // Ping sits in the same toolbar so filter controls read as one
+              // coherent unit instead of scattered floats.
+              Tooltip(
+                message: _zh ? '测速当前组全部节点' : 'Probe every node in this group',
+                child: IconButton(
+                  key: const ValueKey('proxy-group-ping'),
+                  tooltip: _zh ? '整组测速' : 'Ping all nodes',
+                  onPressed: _groupPinging ? null : _onGroupPing,
+                  icon: _groupPinging
+                      ? const SizedBox(
+                          key: ValueKey('proxy-group-ping-progress'),
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.network_ping),
+                ),
+              ),
             ],
           ),
-          Row(
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          child: Row(
             children: [
               Tooltip(
                 message: _zh
@@ -581,27 +659,10 @@ class _ProxyListPageState extends State<ProxyListPage> {
                   ],
                 ),
               ),
-              const Spacer(),
-              Tooltip(
-                message: _zh ? '测速当前组全部节点' : 'Probe every node in this group',
-                child: IconButton(
-                  key: const ValueKey('proxy-group-ping'),
-                  tooltip: _zh ? '整组测速' : 'Ping all nodes',
-                  onPressed: _groupPinging ? null : _onGroupPing,
-                  icon: _groupPinging
-                      ? const SizedBox(
-                          key: ValueKey('proxy-group-ping-progress'),
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.network_ping),
-                ),
-              ),
             ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -664,39 +725,49 @@ class _ProxyListPageState extends State<ProxyListPage> {
   /// Text status line for the recommendation, making all three states
   /// distinguishable without relying on the single-bit recommendation badge.
   Widget _buildBestStatusLine() {
-    final String message;
+    final String state;
     switch (_bestState) {
       case _BestState.noData:
-        message = _zh ? '推荐状态：暂无观测数据' : 'Recommendation: no data yet';
+        state = _zh ? '无样本' : 'No samples';
       case _BestState.currentIsBest:
-        message = _zh
-            ? '推荐状态：当前节点已是最佳'
-            : 'Recommendation: current node is best';
+        state = _zh ? '当前最优' : 'Current node is best';
       case _BestState.suggestSwitch:
         final target = _best ?? '-';
-        message = _zh
-            ? '推荐状态：建议切换到 $target'
-            : 'Recommendation: switch to $target';
+        state = _zh ? '切换至 $target' : 'Switch to $target';
     }
     final textTheme = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            message,
-            key: const ValueKey('proxy-best-state'),
-            style: textTheme.bodySmall,
+          Row(
+            children: [
+              Text(
+                _zh ? '建议' : 'Recommendation',
+                style: textTheme.labelLarge?.copyWith(
+                  color: scheme.primary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                state,
+                key: const ValueKey('proxy-best-state'),
+                style: textTheme.bodySmall,
+              ),
+            ],
           ),
           if (_pollFailed)
-            Text(
-              _zh
-                  ? '当前节点状态暂不可用（获取超时）'
-                  : 'Current node unavailable (poll timed out)',
-              key: const ValueKey('proxy-poll-timeout'),
-              style: textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.error,
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                _zh
+                    ? '当前节点状态暂不可用（获取超时）'
+                    : 'Current node unavailable (poll timed out)',
+                key: const ValueKey('proxy-poll-timeout'),
+                style: textTheme.bodySmall?.copyWith(color: scheme.error),
               ),
             ),
         ],
@@ -802,38 +873,36 @@ class _ProxyListPageState extends State<ProxyListPage> {
                           ),
                         ),
                         const SizedBox(width: 10),
-                        // Tap-to-test: probe just this node, then recompute.
-                        InkWell(
-                          key: ValueKey('proxy-delay-${proxy.name}'),
-                          onTap: canTap ? () => _onProbeTap(proxy) : null,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (probing)
-                                SizedBox(
-                                  width: 12,
-                                  height: 12,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              else
-                                Icon(
-                                  Icons.speed,
-                                  size: 13,
-                                  color: delayColor(proxy.delay),
-                                ),
-                              const SizedBox(width: 4),
-                              Text(
-                                probing
-                                    ? (_zh ? '测试中' : 'Testing')
-                                    : delayLabel(l10n, proxy.delay),
-                                style: textTheme.labelMedium?.copyWith(
-                                  color: delayColor(proxy.delay),
-                                  fontWeight: FontWeight.w600,
-                                ),
+                        // Single test control: the delay label itself. The
+                        // status dot at the left is the only colour-coded
+                        // latency affordance, so no second icon is needed.
+                        Tooltip(
+                          message: _zh ? '点击测速该节点' : 'Tap to test this node',
+                          child: InkWell(
+                            key: ValueKey('proxy-delay-${proxy.name}'),
+                            onTap: canTap ? () => _onProbeTap(proxy) : null,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 2,
                               ),
-                            ],
+                              child: probing
+                                  ? const SizedBox(
+                                      width: 13,
+                                      height: 13,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : Text(
+                                      delayLabel(l10n, proxy.delay),
+                                      style: textTheme.labelMedium?.copyWith(
+                                        color: scheme.onSurface,
+                                        fontWeight: FontWeight.w600,
+                                        decoration: TextDecoration.underline,
+                                      ),
+                                    ),
+                            ),
                           ),
                         ),
                       ],

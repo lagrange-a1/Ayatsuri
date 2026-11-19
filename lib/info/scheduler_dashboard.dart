@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import '../data/endpoints.dart';
 import '../proxies/proxy_service.dart';
 import '../proxies/scheduler_wrapper.dart';
+import '../settings/boot_policy.dart';
 
 /// Inline bilingual helper: new copy stays local to this widget so the l10n
 /// generated files do not need to change.
@@ -98,10 +99,24 @@ class SchedulerDashboardState extends State<SchedulerDashboard> {
   /// Separate from [_ranking] so a one-tap probe cannot be double-submitted.
   bool _probing = false;
 
+  // ── durable startup policy ──────────────────────────────────────────────
+  /// The dashboard binds to this controller's public [ValueNotifier]. Reading
+  /// it at init handles an already-loaded policy; listening handles the app
+  /// loading or changing the policy after this page is mounted.
+  final BootPolicyController _bootPolicy = BootPolicyController.instance;
+
+  /// Bumped on every (re)attach so a stale load callback from a replaced
+  /// selection can never start a probe or mutate state.
+  int _attachGeneration = 0;
+
+  /// One-shot: the boot-policy group probe runs at most once per dashboard.
+  bool _startupProbeDone = false;
+
   // ── background auto-scheduling ──────────────────────────────────────────
-  /// Default OFF: an IndexStack-resident page must be silent until the user
-  /// explicitly opts in, so no timer (and therefore no probe) is created here.
+  /// Initialised from the boot policy at init; a manual switch flip then owns
+  /// the setting for the rest of this session.
   bool _autoEnabled = false;
+  bool _autoUserOverridden = false;
   Timer? _autoTimer;
   String? _lastAutoNote;
 
@@ -115,7 +130,13 @@ class SchedulerDashboardState extends State<SchedulerDashboard> {
   @override
   void initState() {
     super.initState();
+    final mode = _bootPolicy.notifier.value;
+    // `probe` leaves the switch off; `probeAndSchedule` starts it on. Either
+    // can still be overridden by the in-page switch for this session.
+    _autoEnabled = mode == ProbeBootstrap.probeAndSchedule;
+    _bootPolicy.notifier.addListener(_onBootPolicyChanged);
     _attach();
+    if (mode == ProbeBootstrap.probeAndSchedule) _syncAutoTimer();
   }
 
   @override
@@ -137,27 +158,61 @@ class SchedulerDashboardState extends State<SchedulerDashboard> {
 
   @override
   void dispose() {
+    _bootPolicy.notifier.removeListener(_onBootPolicyChanged);
     _autoTimer?.cancel();
     _autoTimer = null;
     super.dispose();
   }
 
   void _attach() {
+    final generation = ++_attachGeneration;
     _syncGroups();
     if (!_selection.loaded) {
       _selection
           .load()
           .then((_) {
-            if (!mounted) return;
+            if (!mounted || generation != _attachGeneration) return;
             setState(_syncGroups);
             _refreshRanks();
+            _maybeStartupProbe();
           })
           .catchError((Object e) {
-            if (!mounted) return;
+            if (!mounted || generation != _attachGeneration) return;
             setState(() => _error = e.toString());
           });
     } else {
       _refreshRanks();
+      _maybeStartupProbe();
+    }
+  }
+
+  /// One-shot group probe requested by the durable boot policy.
+  ///
+  /// Runs only once the selection is loaded and a group exists, and reuses the
+  /// exact batched [_probeGroup] path as the manual action — so startup probes
+  /// build samples but never call bestProxy/select. Guarded by [mounted] and
+  /// the one-shot flag so a late policy notification cannot double-probe.
+  void _maybeStartupProbe() {
+    if (!mounted || _startupProbeDone) return;
+    if (!_selection.loaded || _group == null) return;
+    if (_bootPolicy.notifier.value == ProbeBootstrap.off) return;
+    _startupProbeDone = true;
+    unawaited(_probeGroup());
+  }
+
+  /// Live binding to the policy notifier. Covers the case where the app loads
+  /// or changes the policy after this page is mounted: `probe` triggers the
+  /// one-shot probe, `probeAndSchedule` also seeds/enables the loop unless the
+  /// user has already overridden the switch this session.
+  void _onBootPolicyChanged() {
+    if (!mounted) return;
+    _maybeStartupProbe();
+    if (_autoUserOverridden) return;
+    final shouldAuto =
+        _bootPolicy.notifier.value == ProbeBootstrap.probeAndSchedule;
+    if (shouldAuto != _autoEnabled) {
+      setState(() => _autoEnabled = shouldAuto);
+      _syncAutoTimer();
     }
   }
 
@@ -429,6 +484,9 @@ class SchedulerDashboardState extends State<SchedulerDashboard> {
   }
 
   void _toggleAuto(bool enabled) {
+    // A manual flip owns the switch for this session, regardless of the boot
+    // policy (including any later policy change delivered via the notifier).
+    _autoUserOverridden = true;
     setState(() => _autoEnabled = enabled);
     _syncAutoTimer();
   }
@@ -470,7 +528,7 @@ class SchedulerDashboardState extends State<SchedulerDashboard> {
                 key: ValueKey('scheduler-lowest-${row.proxy}'),
                 visualDensity: VisualDensity.compact,
                 label: Text(
-                  zh ? '最低分' : 'Lowest',
+                  zh ? '最优' : 'Best',
                   style: const TextStyle(fontSize: 11),
                 ),
               ),
@@ -612,8 +670,8 @@ class SchedulerDashboardState extends State<SchedulerDashboard> {
                   child: Text(
                     _tr(
                       context,
-                      '图例：评分越低越好 · EWMA 单位为毫秒',
-                      'Legend: lower score is better · EWMA is in ms',
+                      '排序键：Score（升序，低值优先）· EWMA/Jitter 单位 ms',
+                      'Sort key: Score (ascending, lower first) · EWMA/Jitter in ms',
                     ),
                     key: const ValueKey('scheduler-legend'),
                     style: Theme.of(context).textTheme.bodySmall,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
+import 'app/bootstrap.dart';
 import 'data/endpoints.dart';
 import 'globe/globe_map_page.dart';
 import 'info/info_page.dart';
@@ -16,8 +17,14 @@ bool _navZh(BuildContext context) =>
     Localizations.localeOf(context).languageCode == 'zh';
 
 class MyApp extends StatelessWidget {
-  MyApp({super.key, AppSettingsController? settingsController})
-    : _controller = settingsController ?? AppSettingsController();
+  MyApp({
+    super.key,
+    AppServices? services,
+    AppSettingsController? settingsController,
+  }) : _controller =
+           services?.settingsController ??
+           settingsController ??
+           AppSettingsController();
 
   final AppSettingsController _controller;
 

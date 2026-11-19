@@ -7,6 +7,7 @@ import '../proxies/address_filter.dart';
 import '../proxies/scheduler_wrapper.dart';
 import 'advanced_console.dart';
 import 'app_settings.dart';
+import 'boot_policy.dart';
 
 const _seedPresets = <Color>[
   Color(0xFFE65100), // orange (default)
@@ -498,6 +499,9 @@ class SettingsPage extends StatelessWidget {
                 value: s.compactNodeList,
                 onChanged: (v) => set(s.copyWith(compactNodeList: v)),
               ),
+              // Startup behaviour closes out the smart-routing area: it is a
+              // clearly titled subsection bound to the boot-policy controller.
+              _startupBehaviourSection(context),
               const Divider(height: 32),
               _header(context, _smartLabel(context, '关于', 'About')),
               ListTile(
@@ -514,6 +518,61 @@ class SettingsPage extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+
+  /// Startup probe policy. The source of truth is [BootPolicyController]'s
+  /// notifier, not `AppSettings`: this keeps the freezed model untouched and
+  /// makes the choice immediately visible to app init (which branches on the
+  /// same value) and to any other page listening to the notifier.
+  Widget _startupBehaviourSection(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _header(context, _smartLabel(context, '启动行为', 'Startup behaviour')),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text(
+            _smartLabel(
+              context,
+              '关闭：保持仅手动测速；仅测速：启动后对整组节点测速一次；测速并自动调度：同时开启定时自动调度。',
+              'Off keeps probing manual-only; the other modes run one full-group probe at startup, and "Probe + schedule" also turns on periodic auto-scheduling.',
+            ),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+        const SizedBox(height: 8),
+        ValueListenableBuilder<ProbeBootstrap>(
+          valueListenable: BootPolicyController.instance.notifier,
+          builder: (context, mode, _) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: SegmentedButton<ProbeBootstrap>(
+                key: const ValueKey('settings-startup-probe'),
+                segments: [
+                  ButtonSegment(
+                    value: ProbeBootstrap.off,
+                    label: Text(_smartLabel(context, '关闭', 'Off')),
+                  ),
+                  ButtonSegment(
+                    value: ProbeBootstrap.probe,
+                    label: Text(_smartLabel(context, '仅测速', 'Probe')),
+                  ),
+                  ButtonSegment(
+                    value: ProbeBootstrap.probeAndSchedule,
+                    label: Text(
+                      _smartLabel(context, '测速并自动调度', 'Probe + schedule'),
+                    ),
+                  ),
+                ],
+                selected: {mode},
+                onSelectionChanged: (v) =>
+                    BootPolicyController.instance.set(v.first),
+              ),
+            );
+          },
+        ),
+      ],
     );
   }
 
