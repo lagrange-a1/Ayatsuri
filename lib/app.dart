@@ -4,7 +4,6 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'data/endpoints.dart';
 import 'globe/globe_map_page.dart';
 import 'info/info_page.dart';
-import 'info/scheduler_dashboard.dart';
 import 'l10n/app_localizations.dart';
 import 'proxies/proxy_list_page.dart';
 import 'settings/app_settings.dart';
@@ -111,7 +110,8 @@ class _MihomoAppState extends State<MihomoApp> {
 
   /// Globe stays the home tab; every data page is keyed by the connection
   /// identity so switching endpoints rebuilds it (and refetches). Tabs in
-  /// order: globe, nodes, schedule, info, settings.
+  /// order: globe, nodes, info, settings. Scheduling is embedded in the
+  /// nodes page, so it has no standalone tab.
   List<Widget> get pages => [
     GlobeMapPage(
       key: ValueKey('globe$_connKey'),
@@ -119,7 +119,6 @@ class _MihomoAppState extends State<MihomoApp> {
       settingsController: widget.settingsController,
     ),
     ProxyListPage(key: ValueKey('nodes$_connKey'), api: _api),
-    SchedulerDashboard(key: ValueKey('schedule$_connKey'), api: _api),
     MihomoInfo(key: ValueKey('info$_connKey'), api: _api),
     SettingsPage(
       key: ValueKey('settings$_connKey'),
@@ -136,10 +135,6 @@ class _MihomoAppState extends State<MihomoApp> {
     BottomNavigationBarItem(
       icon: const Icon(Icons.dns, size: 28),
       label: zh ? '节点' : 'Nodes',
-    ),
-    BottomNavigationBarItem(
-      icon: const Icon(Icons.schedule, size: 28),
-      label: zh ? '调度' : 'Schedule',
     ),
     BottomNavigationBarItem(
       icon: const Icon(Icons.info, size: 28),

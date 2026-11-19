@@ -15,6 +15,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ayatsuri/data/endpoints.dart';
+import 'package:ayatsuri/info/scheduler_dashboard.dart';
 import 'package:ayatsuri/l10n/app_localizations.dart';
 import 'package:ayatsuri/proxies/proxy_list_page.dart';
 import 'package:ayatsuri/proxies/proxy_service.dart';
@@ -92,7 +93,8 @@ class FakeProxyApi extends MihomoAPI {
 }
 
 /// A ProxySelection that records which selection method a tap reached and
-/// returns a deterministic best-proxy suggestion for the badge test.
+/// returns a deterministic best-proxy suggestion for the badge test. It also
+/// records the `current` anchor and how many times bestProxy was asked.
 class RecordingProxySelection extends ProxySelection {
   RecordingProxySelection({required MihomoAPI api, this.best})
     : super(api: api);
@@ -100,12 +102,18 @@ class RecordingProxySelection extends ProxySelection {
   final String? best;
   final List<(String, String)> selects = <(String, String)>[];
   final List<(String, String)> selectAnys = <(String, String)>[];
+  final List<String?> currentCalls = <String?>[];
+  int bestCalls = 0;
 
   @override
   Future<String?> bestProxy({
     Iterable<String>? candidates,
     String? current,
-  }) async => best;
+  }) async {
+    currentCalls.add(current);
+    bestCalls++;
+    return best;
+  }
 
   @override
   Future<void> select(String groupName, String proxyName) async {
@@ -122,22 +130,98 @@ class RecordingProxySelection extends ProxySelection {
 
 /// A ProxySelection whose `bestProxy` answers are controlled by the test, so
 /// an old group's answer can be completed *after* a newer group's answer to
-/// exercise the generation guard.
+/// exercise the generation guard. Also records the `current` anchor.
 class RaceProxySelection extends ProxySelection {
   RaceProxySelection({required MihomoAPI api}) : super(api: api);
 
   final List<Completer<String?>> _answers = <Completer<String?>>[];
   final List<Iterable<String>?> candidateCalls = <Iterable<String>?>[];
+  final List<String?> currentCalls = <String?>[];
 
   @override
   Future<String?> bestProxy({Iterable<String>? candidates, String? current}) {
     candidateCalls.add(candidates);
+    currentCalls.add(current);
     final completer = Completer<String?>();
     _answers.add(completer);
     return completer.future;
   }
 
   void answer(int call, String? node) => _answers[call].complete(node);
+}
+
+/// Records single-node probe taps without issuing HTTP: the page must call
+/// probeByName for the tapped node and then recompute the recommendation.
+class ProbeRecordingSelection extends RecordingProxySelection {
+  ProbeRecordingSelection({required MihomoAPI api, String? best})
+    : super(api: api, best: best);
+
+  final List<String> probed = <String>[];
+
+  @override
+  Future<void> probeByName(
+    String name, {
+    String url = kDefaultProbeUrl,
+    int timeout = kProbeTimeoutMs,
+  }) async {
+    probed.add(name);
+  }
+}
+
+/// Simulates a controller whose `now` is briefly unknown after load: the
+/// group's `now` is hidden until the third load, so the page's bounded poll
+/// must resolve it instead of leaving the recommendation empty.
+class LateNowSelection extends RecordingProxySelection {
+  LateNowSelection({required MihomoAPI api}) : super(api: api);
+
+  int loads = 0;
+
+  @override
+  Future<void> load() async {
+    loads++;
+    await super.load();
+  }
+
+  @override
+  List<GroupItem> get allGroups {
+    final groups = super.allGroups;
+    if (loads < 3) {
+      return groups
+          .map((g) => GroupItem(name: g.name, type: g.type, all: g.all))
+          .toList();
+    }
+    return groups;
+  }
+}
+
+/// A controller whose `now` is never published: the bounded poll must exhaust
+/// and surface a visible "unavailable" status instead of failing silently.
+class NeverNowSelection extends RecordingProxySelection {
+  NeverNowSelection({required MihomoAPI api}) : super(api: api);
+
+  int loads = 0;
+
+  @override
+  Future<void> load() async {
+    loads++;
+    await super.load();
+  }
+
+  @override
+  List<GroupItem> get allGroups => super.allGroups
+      .map((g) => GroupItem(name: g.name, type: g.type, all: g.all))
+      .toList();
+}
+
+/// bestProxy that always throws: a failure must not clear the default or
+/// stall the list.
+class ThrowingBestSelection extends ProxySelection {
+  ThrowingBestSelection({required MihomoAPI api}) : super(api: api);
+
+  @override
+  Future<String?> bestProxy({Iterable<String>? candidates, String? current}) {
+    throw StateError('best boom');
+  }
 }
 
 Future<RecordingProxySelection> _pumpPage(
@@ -147,6 +231,15 @@ Future<RecordingProxySelection> _pumpPage(
 }) async {
   final api = FakeProxyApi()..failSelect = failSelect;
   final selection = RecordingProxySelection(api: api, best: best);
+  await _pumpWith(tester, api: api, selection: selection);
+  return selection;
+}
+
+Future<void> _pumpWith(
+  WidgetTester tester, {
+  required MihomoAPI api,
+  required ProxySelection selection,
+}) async {
   await tester.pumpWidget(
     MaterialApp(
       locale: const Locale('en'),
@@ -162,7 +255,6 @@ Future<RecordingProxySelection> _pumpPage(
     ),
   );
   await tester.pumpAndSettle();
-  return selection;
 }
 
 void main() {
@@ -240,7 +332,7 @@ void main() {
   testWidgets('bestProxy suggestion gets a recommendation badge', (
     tester,
   ) async {
-    await _pumpPage(tester, best: 'CN 1');
+    final selection = await _pumpPage(tester, best: 'CN 1');
     expect(
       find.byKey(const ValueKey('proxy-recommended-CN 1')),
       findsOneWidget,
@@ -248,6 +340,8 @@ void main() {
     expect(find.text('Recommended'), findsOneWidget);
     // The current node (HK 2) never receives the recommendation badge.
     expect(find.byKey(const ValueKey('proxy-recommended-HK 2')), findsNothing);
+    // The current node is passed as the bestProxy anchor (RC-2 fix).
+    expect(selection.currentCalls, contains('HK 2'));
   });
 
   testWidgets('selection failure shows a readable snackbar', (tester) async {
@@ -270,16 +364,31 @@ void main() {
   ) async {
     await _pumpPage(tester);
 
-    final nowTile = tester.widget<ListTile>(
+    // The current node's M3 card uses primaryContainer + a primary border
+    // and carries the check icon; other nodes stay on the plain card.
+    final nowCard = tester.widget<Card>(
       find.byKey(const ValueKey('proxy-node-HK 2')),
     );
-    expect(nowTile.selected, isTrue);
-    expect(nowTile.selectedTileColor, isNotNull);
+    expect(nowCard.color, isNotNull);
+    final nowShape = nowCard.shape! as RoundedRectangleBorder;
+    expect(nowShape.side.width, greaterThan(0));
+    expect(find.byKey(const ValueKey('proxy-current-HK 2')), findsOneWidget);
 
-    final otherTile = tester.widget<ListTile>(
+    final otherCard = tester.widget<Card>(
       find.byKey(const ValueKey('proxy-node-CN 1')),
     );
-    expect(otherTile.selected, isFalse);
+    expect(otherCard.color, isNull);
+    // Non-current cards use the full outlineVariant (no 40% alpha fade).
+    final otherShape = otherCard.shape! as RoundedRectangleBorder;
+    final scheme = Theme.of(
+      tester.element(find.byType(ProxyListPage)),
+    ).colorScheme;
+    expect(otherShape.side.color, scheme.outlineVariant);
+    expect(otherShape.side.color.a, 1.0);
+    expect(find.byKey(const ValueKey('proxy-current-CN 1')), findsNothing);
+    // Policy tag + tappable delay are present on each card.
+    expect(find.byKey(const ValueKey('proxy-type-HK 2')), findsOneWidget);
+    expect(find.byKey(const ValueKey('proxy-delay-HK 2')), findsOneWidget);
     expect(find.text('Force-select auto groups'), findsOneWidget);
     expect(
       find.ancestor(
@@ -316,8 +425,8 @@ void main() {
         ),
       ),
     );
-    // The initial bestProxy answer is held pending, so the loading spinner
-    // animates: single pumps, not pumpAndSettle, until the last answer.
+    // The initial bestProxy answer is held pending, so single pumps are used
+    // until the group chips appear (the list itself renders before bestProxy).
     for (
       var i = 0;
       i < 20 &&
@@ -337,6 +446,9 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(selection.candidateCalls, hasLength(2));
+    // Both asks were anchored on a real current node.
+    expect(selection.currentCalls, contains('HK 2'));
+    expect(selection.currentCalls, contains('JP 4'));
 
     // Newest answer: no recommendation for the current group.
     selection.answer(1, null);
@@ -349,5 +461,265 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('proxy-recommended-SG 5')), findsNothing);
     expect(find.text('SG 5'), findsOneWidget); // row still shown, just no badge
+  });
+
+  // ── A: recommendation default / polling / override ────────────────────
+
+  testWidgets('with no probe samples the recommendation defaults to current', (
+    tester,
+  ) async {
+    // A real, un-probed selection: the scheduler has no observations, so it
+    // returns null. The badge must degrade to "stay on current", not blank.
+    final api = FakeProxyApi();
+    final selection = ProxySelection(api: api);
+    await _pumpWith(tester, api: api, selection: selection);
+
+    expect(find.byKey(const ValueKey('proxy-current-HK 2')), findsOneWidget);
+    expect(find.byKey(const ValueKey('proxy-recommended-HK 2')), findsNothing);
+    expect(find.byKey(const ValueKey('proxy-recommended-CN 1')), findsNothing);
+    expect(find.byKey(const ValueKey('proxy-recommended-US 3')), findsNothing);
+    // List is rendered, not stuck behind a spinner.
+    expect(find.byKey(const ValueKey('proxy-node-CN 1')), findsOneWidget);
+  });
+
+  testWidgets('null or throwing bestProxy never clears the default', (
+    tester,
+  ) async {
+    for (final selection in <ProxySelection>[
+      RecordingProxySelection(api: FakeProxyApi()), // returns null
+      ThrowingBestSelection(api: FakeProxyApi()), // throws
+    ]) {
+      await _pumpWith(tester, api: FakeProxyApi(), selection: selection);
+
+      expect(find.byKey(const ValueKey('proxy-node-HK 2')), findsOneWidget);
+      expect(find.byKey(const ValueKey('proxy-current-HK 2')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('proxy-recommended-CN 1')),
+        findsNothing,
+      );
+      // Move off the page so the next selection can be pumped cleanly.
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    }
+  });
+
+  testWidgets('bounded polling resolves an unknown current node', (
+    tester,
+  ) async {
+    final api = FakeProxyApi();
+    final selection = LateNowSelection(api: api);
+    await _pumpWith(tester, api: api, selection: selection);
+
+    // The poll reloaded a few times, but stopped well short of any risk of
+    // an infinite loop, and the current node was seeded as the default.
+    expect(selection.loads, greaterThanOrEqualTo(3));
+    expect(selection.loads, lessThanOrEqualTo(20));
+    expect(find.byKey(const ValueKey('proxy-current-HK 2')), findsOneWidget);
+    expect(find.byKey(const ValueKey('proxy-recommended-CN 1')), findsNothing);
+    expect(selection.currentCalls, contains('HK 2'));
+  });
+
+  // ── Tap-to-test probe ──────────────────────────────────────────────────
+
+  testWidgets('tapping the delay label probes only that node and recomputes', (
+    tester,
+  ) async {
+    final api = FakeProxyApi();
+    final selection = ProbeRecordingSelection(api: api);
+    await _pumpWith(tester, api: api, selection: selection);
+
+    // No startup sweep: nothing probed before the user taps.
+    expect(selection.probed, isEmpty);
+    final callsBefore = selection.bestCalls;
+    expect(callsBefore, greaterThanOrEqualTo(1));
+
+    await tester.tap(find.byKey(const ValueKey('proxy-delay-CN 1')));
+    await tester.pumpAndSettle();
+
+    expect(selection.probed, <String>['CN 1']);
+    expect(selection.bestCalls, greaterThan(callsBefore));
+    expect(selection.currentCalls, contains('HK 2'));
+  });
+
+  // ── B: scheduler embedded with a shared ProxySelection ────────────────
+
+  testWidgets('scheduler view is embedded and shares the page selection', (
+    tester,
+  ) async {
+    final api = FakeProxyApi();
+    final selection = RecordingProxySelection(api: api);
+    await _pumpWith(tester, api: api, selection: selection);
+
+    // Nodes are the default view; the scheduler is switched out.
+    expect(find.byKey(const ValueKey('proxy-node-HK 2')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('scheduler-auto-schedule-switch')),
+      findsNothing,
+    );
+
+    // Switch to the schedule view via the M3 segmented button. The segment
+    // indicator + freshly mounted dashboard need two short frames before a
+    // settle check, otherwise the transition can keep pumpAndSettle chasing.
+    await tester.tap(find.text('Schedule'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.byType(SchedulerDashboard), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('scheduler-auto-schedule-switch')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('scheduler-auto-select')), findsOneWidget);
+    expect(find.byKey(const ValueKey('scheduler-backend')), findsOneWidget);
+    // The dashboard reads current from the SAME selection (HK 2), confirming
+    // the observation window is shared rather than a fresh instance.
+    expect(find.textContaining('HK 2'), findsWidgets);
+    expect(find.byKey(const ValueKey('proxy-node-HK 2')), findsNothing);
+
+    // Auto-schedule switch stays present, off by default and interactive.
+    final autoKey = const ValueKey('scheduler-auto-schedule-switch');
+    final autoSwitch = tester.widget<Switch>(find.byKey(autoKey));
+    expect(autoSwitch.value, isFalse);
+    expect(autoSwitch.onChanged, isNotNull);
+
+    // Switch back to nodes (no periodic timer is ever started here).
+    await tester.tap(find.text('Nodes'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byKey(const ValueKey('proxy-node-HK 2')), findsOneWidget);
+  });
+
+  // ── P0/P1 fixes: tri-state, poll feedback, adopt, guard, ON path, a11y ──
+
+  testWidgets('recommendation status text distinguishes all three states', (
+    tester,
+  ) async {
+    final cases = <(ProxySelection, String)>[
+      (
+        RecordingProxySelection(api: FakeProxyApi()),
+        'Recommendation: no data yet',
+      ),
+      (
+        RecordingProxySelection(api: FakeProxyApi(), best: 'HK 2'),
+        'Recommendation: current node is best',
+      ),
+      (
+        RecordingProxySelection(api: FakeProxyApi(), best: 'CN 1'),
+        'Recommendation: switch to CN 1',
+      ),
+    ];
+    for (var i = 0; i < cases.length; i++) {
+      final (selection, message) = cases[i];
+      await _pumpWith(tester, api: FakeProxyApi(), selection: selection);
+
+      expect(find.byKey(const ValueKey('proxy-best-state')), findsOneWidget);
+      expect(find.text(message), findsOneWidget);
+      // Only the "switch" state paints a recommendation badge.
+      expect(
+        find.byKey(const ValueKey('proxy-recommended-CN 1')),
+        i == 2 ? findsOneWidget : findsNothing,
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    }
+  });
+
+  testWidgets('bounded poll exhaustion shows a visible status, not silence', (
+    tester,
+  ) async {
+    final api = FakeProxyApi();
+    final selection = NeverNowSelection(api: api);
+    await _pumpWith(tester, api: api, selection: selection);
+    // Ensure every delayed poll attempt has fired even if pumpAndSettle
+    // stopped early (no frame is scheduled between unsuccessful attempts).
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    expect(selection.loads, greaterThan(1));
+    expect(selection.loads, lessThanOrEqualTo(1 + 8));
+    expect(find.byKey(const ValueKey('proxy-node-HK 2')), findsOneWidget);
+    // The failure is visible as a short status line instead of being silent.
+    expect(find.byKey(const ValueKey('proxy-poll-timeout')), findsOneWidget);
+    expect(find.textContaining('poll timed out'), findsOneWidget);
+  });
+
+  testWidgets('manual node tap adopts the node as the hysteresis anchor', (
+    tester,
+  ) async {
+    final selection = await _pumpPage(tester);
+    expect(selection.selector.current, isNull);
+
+    await tester.tap(find.byKey(const ValueKey('proxy-node-CN 1')));
+    await tester.pumpAndSettle();
+
+    expect(selection.selects, contains(('PROXY', 'CN 1')));
+    expect(selection.selector.current, 'CN 1');
+  });
+
+  testWidgets('re-tapping the selected group triggers no recompute', (
+    tester,
+  ) async {
+    final selection = await _pumpPage(tester);
+    final callsBefore = selection.bestCalls;
+    expect(callsBefore, greaterThanOrEqualTo(1));
+
+    await tester.tap(find.byKey(const ValueKey('proxy-group-PROXY')));
+    await tester.pumpAndSettle();
+
+    expect(selection.bestCalls, callsBefore);
+    expect(find.byKey(const ValueKey('proxy-node-HK 2')), findsOneWidget);
+  });
+
+  testWidgets('auto schedule ON runs periodic cycles and OFF cancels them', (
+    tester,
+  ) async {
+    final api = FakeProxyApi();
+    final selection = ProbeRecordingSelection(api: api);
+    await _pumpWith(tester, api: api, selection: selection);
+
+    await tester.tap(find.text('Schedule'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byType(SchedulerDashboard), findsOneWidget);
+
+    final autoKey = const ValueKey('scheduler-auto-schedule-switch');
+    expect(selection.probed, isEmpty);
+
+    // Opt in: a periodic timer must fire one full cycle after the period.
+    await tester.tap(find.byKey(autoKey));
+    await tester.pump();
+    expect(tester.widget<Switch>(find.byKey(autoKey)).value, isTrue);
+
+    await tester.pump(kAutoSchedulePeriod + const Duration(milliseconds: 1));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump();
+    }
+    expect(selection.probed.length, greaterThan(0));
+
+    // Opt out: advancing another full period must produce no further probes.
+    await tester.tap(find.byKey(autoKey));
+    await tester.pump();
+    expect(tester.widget<Switch>(find.byKey(autoKey)).value, isFalse);
+    final probesAtOff = selection.probed.length;
+
+    await tester.pump(kAutoSchedulePeriod + const Duration(milliseconds: 1));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump();
+    }
+    expect(selection.probed.length, probesAtOff);
+  });
+
+  testWidgets('both view-switch segments have tooltips', (tester) async {
+    await _pumpPage(tester);
+    expect(
+      find.ancestor(of: find.text('Nodes'), matching: find.byType(Tooltip)),
+      findsOneWidget,
+    );
+    expect(
+      find.ancestor(of: find.text('Schedule'), matching: find.byType(Tooltip)),
+      findsOneWidget,
+    );
   });
 }

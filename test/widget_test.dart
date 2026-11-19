@@ -7,7 +7,7 @@ import 'package:ayatsuri/main.dart';
 void main() async {
   // `main()` is not called by the widget test, so dotenv must be loaded
   // inside the test body (the binding already exists there).
-  testWidgets('App has a globe page and a five-item bottom navigation bar', (
+  testWidgets('App has a globe page and a four-item bottom navigation bar', (
     WidgetTester tester,
   ) async {
     dotenv.loadFromString(envString: 'host=localhost\nport=9091\nsecret=***\n');
@@ -21,33 +21,27 @@ void main() async {
     expect(find.text('Globe (3D unavailable in tests)'), findsOneWidget);
     expect(find.text('Tap a Country/Region'), findsOneWidget);
 
-    // Five fixed tabs in order: globe, nodes, schedule, info, settings.
+    // Four fixed tabs in order: globe, nodes, info, settings. Scheduling is
+    // embedded in the nodes page and has no standalone tab.
     final nav = tester.widget<BottomNavigationBar>(
       find.byType(BottomNavigationBar),
     );
     expect(nav.type, BottomNavigationBarType.fixed);
-    expect(nav.items.length, 5);
+    expect(nav.items.length, 4);
     expect(find.byIcon(Icons.public), findsOneWidget);
     expect(find.byIcon(Icons.dns), findsOneWidget);
-    expect(find.byIcon(Icons.schedule), findsOneWidget);
     expect(find.byIcon(Icons.info), findsOneWidget);
     expect(find.byIcon(Icons.settings), findsOneWidget);
 
-    // Nodes tab mounts the standalone list selector. IndexedStack keeps
-    // offstage tabs out of the finder, so these keys appear only once the
-    // tab is selected.
+    // Nodes tab mounts the proxy list page. IndexedStack keeps offstage tabs
+    // out of the finder, so these keys appear only once the tab is selected.
+    // We only assert the page is mounted, not its embedded scheduling detail
+    // (owned by the parallel ui node).
     await tester.tap(find.byIcon(Icons.dns));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('proxy-refresh')), findsOneWidget);
     expect(find.byKey(const ValueKey('proxy-dev-switch')), findsOneWidget);
     expect(find.text('Select a node · Globe'), findsNothing);
-
-    // Schedule tab mounts the Rust/Dart dashboard.
-    await tester.tap(find.byIcon(Icons.schedule));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('scheduler-backend')), findsOneWidget);
-    expect(find.byKey(const ValueKey('scheduler-auto-select')), findsOneWidget);
-    expect(find.byKey(const ValueKey('proxy-refresh')), findsNothing);
 
     // The info tab also fetches on startup; the error state is environment
     // dependent (9091 is auth-gated here), so any rendered article state is
@@ -58,6 +52,6 @@ void main() async {
     // tree is disposed.
     await tester.pumpAndSettle();
     expect(find.text('Ayatsuri · Mihomo Info'), findsOneWidget);
-    expect(find.byKey(const ValueKey('scheduler-backend')), findsNothing);
+    expect(find.byKey(const ValueKey('proxy-refresh')), findsNothing);
   });
 }
