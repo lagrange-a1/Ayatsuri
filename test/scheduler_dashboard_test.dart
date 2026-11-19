@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:ayatsuri/data/endpoints.dart';
 import 'package:ayatsuri/info/scheduler_dashboard.dart';
+import 'package:ayatsuri/proxies/address_filter.dart';
 import 'package:ayatsuri/l10n/app_localizations.dart';
 import 'package:ayatsuri/proxies/proxy_service.dart';
 import 'package:ayatsuri/proxies/scheduler_wrapper.dart';
@@ -205,6 +206,27 @@ class PreferenceAwareScheduler extends SchedulerWrapper {
   @override
   Future<List<NodeRank>> rank(Iterable<String> candidates) async =>
       const <NodeRank>[];
+}
+
+/// A Selector that contains a hidden 127/8 node, so the auto-cycle reaches
+/// the commit boundary instead of stopping at `_targetFor`.
+class LoopbackGroupApi extends FakeMihomoApi {
+  @override
+  Future<Response<dynamic>> getGroups() => Future<Response<dynamic>>.value(
+    Response<Map<String, dynamic>>(
+      requestOptions: RequestOptions(),
+      data: <String, dynamic>{
+        'proxies': <dynamic>[
+          <String, dynamic>{
+            'name': 'go',
+            'type': 'Selector',
+            'all': <String>['A', '127.0.0.53'],
+            'now': 'A',
+          },
+        ],
+      },
+    ),
+  );
 }
 
 /// 60-member Selector group: `_probeGroup` must split it into two 50-node
@@ -945,5 +967,34 @@ void main() {
     expect(selection.probes, hasLength(60));
     expect(selection.probes, contains(BigGroupApi.names.last));
     expect(find.byKey(const ValueKey('scheduler-empty')), findsOneWidget);
+  });
+
+  testWidgets('auto cycle never commits a loopback-filtered node', (
+    tester,
+  ) async {
+    await _prepare(tester);
+    AddressFilterController.resetForTests();
+    addTearDown(() => AddressFilterController.resetForTests());
+    await AddressFilterController.setEnabled(<AddressPreset>{
+      AddressPreset.loopback,
+    });
+    final api = LoopbackGroupApi();
+    // The fake scheduler deliberately recommends a hidden node: even a bad
+    // upstream suggestion must be stopped at the commit boundary.
+    final selection = await _loadedRecording(
+      api,
+      FakeScheduler(bestProxy: 'A'),
+      best: '127.0.0.53',
+    );
+    await tester.pumpWidget(_app(selection));
+    await tester.pumpAndSettle();
+    final state = tester.state<SchedulerDashboardState>(
+      find.byType(SchedulerDashboard),
+    );
+    await state.runAutoCycle();
+    await tester.pumpAndSettle();
+
+    expect(api.selectCalls, isEmpty);
+    expect(find.textContaining('Auto schedule failed'), findsOneWidget);
   });
 }

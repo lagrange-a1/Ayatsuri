@@ -124,6 +124,12 @@ class ProxySelection {
         (name) => !_ignoredByScheduler(name) && !_hiddenByAddress(name),
       );
 
+  /// Public form of the single filter invariant. Callers that build their own
+  /// candidate list (auto-schedule, group probe) must pass it through here so
+  /// hidden nodes never enter the scheduler even as observation samples.
+  List<String> routableNames(Iterable<String> candidates) =>
+      _routable(candidates).toList(growable: false);
+
   /// Non-destructive routing suggestion; does not switch any node.
   Future<String?> bestProxy({Iterable<String>? candidates, String? current}) =>
       _selector.best(candidates: _routable(candidates), current: current);
@@ -276,8 +282,21 @@ class ProxySelection {
   }
 
   /// Set a specific node inside a policy group.
-  Future<void> select(String groupName, String proxyName) =>
-      _api.selectProxy(groupName, proxyName: proxyName);
+  ///
+  /// Enforces the address/placeholder filter at the **commit boundary**: a
+  /// hidden node must never be written even if a caller built its candidate
+  /// list without filtering. `selectAny` stays unguarded as the deliberate
+  /// advanced-console escape hatch.
+  Future<void> select(String groupName, String proxyName) {
+    if (!routableNames(<String>[proxyName]).contains(proxyName)) {
+      throw ArgumentError.value(
+        proxyName,
+        'proxyName',
+        'hidden by an address bypass preset or a kernel placeholder',
+      );
+    }
+    return _api.selectProxy(groupName, proxyName: proxyName);
+  }
 
   /// Try to pin [proxyName] inside [group] regardless of the group's policy
   /// type — intended for the settings "dev / advanced" console, where the

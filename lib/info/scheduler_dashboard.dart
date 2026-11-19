@@ -292,7 +292,7 @@ class SchedulerDashboardState extends State<SchedulerDashboard> {
         _error = null;
       });
     }
-    final names = List<String>.from(group.all);
+    final names = _selection.routableNames(group.all);
     try {
       const batchSize = 50;
       for (var i = 0; i < names.length; i += batchSize) {
@@ -339,7 +339,7 @@ class SchedulerDashboardState extends State<SchedulerDashboard> {
     Object? failure;
     try {
       best = await _selection.bestProxy(
-        candidates: group.all,
+        candidates: _selection.routableNames(group.all),
         current: group.now,
       );
     } catch (e) {
@@ -412,7 +412,7 @@ class SchedulerDashboardState extends State<SchedulerDashboard> {
   Future<void> runAutoCycle() async {
     final group = _group;
     if (group == null) return;
-    final candidates = List<String>.from(group.all);
+    final candidates = _selection.routableNames(group.all);
     try {
       // Fresh delays for every candidate before asking the Rust/Dart core.
       for (final name in candidates) {
