@@ -1,4 +1,8 @@
-# Ayatsuri
+<div align="center">
+  <img src="assets/icon/icon-1024.png" alt="Ayatsuri" width="128" height="128">
+
+  # Ayatsuri
+</div>
 
 [![Build Release](https://github.com/lagrange-a1/ayatsuri/actions/workflows/build-release.yml/badge.svg)](https://github.com/lagrange-a1/ayatsuri/actions/workflows/build-release.yml)
 [![pre-commit](https://github.com/lagrange-a1/ayatsuri/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/lagrange-a1/ayatsuri/actions/workflows/pre-commit.yml)
